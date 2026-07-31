@@ -9,10 +9,15 @@ OBJS := $(SRCS:%=$(BUILD_DIR)/%.o)
 INC_DIRS := vendor
 INC_FLAGS := $(addprefix -I,$(INC_DIRS))
 
+DEFINES := 
+
 LDFLAGS := -lm -lpthread -fsanitize=address 
 
 CC := clang
-CFLAGS ?= $(INC_FLAGS) -std=c11 -MMD -MP -O0 -g3 -Wall -Weverything -pedantic -Wno-padded -Wno-switch-enum -Wno-declaration-after-statement -Wno-unsafe-buffer-usage -fsanitize=address
+CFLAGS ?= $(INC_FLAGS) $(DEFINES) -std=gnu23 -MMD -MP -O0 -g3 -Wall -Weverything -pedantic \
+ -Wno-padded -Wno-switch-enum -Wno-declaration-after-statement -Wno-unsafe-buffer-usage \
+ -Wno-implicit-int-conversion -Wno-unused-macros -Wno-sign-conversion -Wno-comma -Wno-documentation \
+ -fsanitize=address
  
 $(BUILD_DIR)/$(TARGET_EXEC): $(OBJS)
 	$(CC) $(OBJS) -o $@ $(LDFLAGS)

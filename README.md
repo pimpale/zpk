@@ -5,7 +5,7 @@ zipkg is a dead simple package manager based around the humble `.zip`. Instead o
 In theory, such packages could be installed with a simple `unzip -d / package.zip`, but zipkg provides several other utilities that a mere unzip does not, since it maintains all original .zips in a cache (stored at `/pkg` by default). This enables:
 
 1. Uninstalling packages. zipkg stores every package in a cache. If an uninstall is desired, it is simple to enumerate which files the package owns, and delete them. 
-2. Upgrading packages, including removing files that are no longer present in the new package.
+2. Upgrading packages, including removing files that are no longer present in the new package. One can also do a full system upgrade, which compares zip creation dates to determine which packages to update.
 2. Querying which package a file belongs to (eg, `pacman -Qo`).
 
 zipkg also allows configuring a list of repositories.
@@ -20,3 +20,21 @@ zipkg also allows configuring a list of repositories.
 
 This package manager is designed for bare-bones distros and new kernels. We want to reduce the number of operations to the minimum, so that it is trivial to port. We also want to make it a good choice for bootstrapping a system: assembling a filesystem that will be turned into the .iso. 
 
+zipkg is easy to port:
+* Does not use symlinks (can be implemented on FAT32)
+* Does not use fork (can be implemented on a SASOS)
+
+
+## Implementation Details
+
+Your system should look like this:
+
+```
+/usr
+/whatever
+/pkg
+/pkg/somepackage1.zip
+/pkg/somepackage2.zip
+```
+
+When we search f

@@ -25,6 +25,8 @@
 
 #else
 
+#include "zip.h"
+
 #if ZIP_HAVE_SYMLINK
 #include <unistd.h> // needed for symlink()
 #endif
@@ -37,7 +39,6 @@
 #endif
 
 #include "miniz.h"
-#include "zip.h"
 
 #ifdef _MSC_VER
 #include <io.h>
