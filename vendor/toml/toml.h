@@ -191,6 +191,7 @@ TomlTable* toml_load_str(TOML_CONST char *str);
 TomlTable* toml_load_nstr(TOML_CONST char *str, size_t len);
 TomlTable* toml_load_file(FILE *file);
 TomlTable* toml_load_filename(TOML_CONST char *filename);
+TomlTable* toml_load_file_filename(FILE *file, TOML_CONST char *filename);
 
 /* TODO: implement dump functions
 char *toml_dump_str(TOML_CONST TomlTable *self, TomlErr *err);

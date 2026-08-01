@@ -2,41 +2,49 @@
 
 #include "constants.h"
 #include "error.h"
+#include "oscompatlayer.h"
 
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include <toml/toml.h>
 
-static const char *GLOBAL_CONFIG_PATH = "/etc/zipkg.ini";
-static const char *CONFIGURATION_FILE_NAME = ".zipkg.ini";
+static const char *SYSTEM_CONFIG_PATH = "/etc/zpk.ini";
+static const char *USER_CONFIG_PATH = "~/.zpk.ini";
+static const char *CONFIGURATION_FILE_NAME = ".zpk.ini";
 
-// walks from the cwd up to /, returning the nearest .zipkg.ini (caller frees),
-// or NULL if none found
-static char *find_local_config(void) {
-  char dir[PATH_MAX];
-  if (getcwd(dir, sizeof dir) == NULL) {
-    return NULL;
+static void truncate_stringvec(vec_char_ptr *vec) {
+  for (uint32_t i = 0; i < vec_char_ptr_len(vec); i++) {
+    free(*vec_char_ptr_at(vec, i));
   }
-
-  for (;;) {
-    char* candidate = malloc() 
-    snprintf(candidate, sizeof candidate, "%s/%s",
-             strcmp(dir, "/") == 0 ? "" : dir, CONFIGURATION_FILE_NAME);
-    if (strcmp(dir, "/") == 0) {
-      return NULL;
-    }
-    char *slash = strrchr(dir, '/');
-    if (slash == dir) {
-      dir[1] = '\0';
-    } else {
-      *slash = '\0';
-    }
-  }
+  vec_char_ptr_clear(vec);
 }
 
-static void apply_config_file(ZipkgConfiguration *config, const char *path) {
-  TomlTable *table = toml_load_filename(path);
+static void delete_stringvec(vec_char_ptr **pVec) {
+  truncate_stringvec(*pVec);
+  vec_char_ptr_delete(pVec);
+}
+
+static void maybe_apply_config_file(ZpkConfiguration *config, const char *path,
+                                    bool cli_specified) {
+  FILE *maybe_file = fopen(path, "r");
+  if (maybe_file == NULL) {
+    if (cli_specified) {
+      LOG_ERROR_ARGS(ERR_LEVEL_FATAL,
+                     "could not open specified config file %s: %s", path,
+                     strerror(errno));
+      PANIC();
+    } else {
+      LOG_ERROR_ARGS(ERR_LEVEL_DEBUG,
+                     "could not open potential conf location %s: %s", path,
+                     strerror(errno));
+      return;
+    }
+  }
+
+  TomlTable *table = toml_load_file_filename(maybe_file, path);
+  fclose(maybe_file);
   if (table == NULL) {
     LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "could not parse %s: %s", path,
                    toml_err()->message);
@@ -44,19 +52,35 @@ static void apply_config_file(ZipkgConfiguration *config, const char *path) {
   }
 
   TomlValue *val = toml_table_get(table, "sysroot");
-  if (val != NULL && val->type == TOML_STRING) {
+  if (val != NULL) {
+    if (val->type != TOML_STRING) {
+      LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "%s: sysroot must be a string", path);
+      PANIC();
+    }
     free(config->sysroot);
-    config->sysroot = strdup(val->value.string->str);
+    config->sysroot = expandtilde(val->value.string->str);
   }
 
   val = toml_table_get(table, "pkgs_path");
-  if (val != NULL && val->type == TOML_STRING) {
+  if (val != NULL) {
+    if (val->type != TOML_STRING) {
+      LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "%s: pkgs_path must be a string", path);
+      PANIC();
+    }
     free(config->pkgs_path);
-    config->pkgs_path = strdup(val->value.string->str);
+    config->pkgs_path = expandtilde(val->value.string->str);
   }
 
   val = toml_table_get(table, "repositories");
-  if (val != NULL && val->type == TOML_ARRAY) {
+  if (val != NULL) {
+    if (val->type != TOML_ARRAY) {
+      LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "%s: repositories must be an array",
+                     path);
+      PANIC();
+    }
+    // repositories (and not extra repositories) means that we replace any
+    // existing repositories with the ones in the config file:
+    truncate_stringvec(config->repositories);
     for (size_t i = 0; i < val->value.array->len; i++) {
       TomlValue *elem = val->value.array->elements[i];
       if (elem->type != TOML_STRING) {
@@ -64,7 +88,28 @@ static void apply_config_file(ZipkgConfiguration *config, const char *path) {
                        path);
         PANIC();
       }
-      char_ptr repo = strdup(elem->value.string->str);
+      char_ptr repo = expandtilde(elem->value.string->str);
+      vec_char_ptr_push(config->repositories, &repo);
+    }
+  }
+
+  val = toml_table_get(table, "extra-repositories");
+  if (val != NULL) {
+    if (val->type != TOML_ARRAY) {
+      LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "%s: extra-repositories must be an array",
+                     path);
+      PANIC();
+    }
+    // extra-repositories (and not repositories) means that we append, and keep
+    // the ones that are already there.
+    for (size_t i = 0; i < val->value.array->len; i++) {
+      TomlValue *elem = val->value.array->elements[i];
+      if (elem->type != TOML_STRING) {
+        LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "%s: repositories must be strings",
+                       path);
+        PANIC();
+      }
+      char_ptr repo = expandtilde(elem->value.string->str);
       vec_char_ptr_push(config->repositories, &repo);
     }
   }
@@ -72,71 +117,117 @@ static void apply_config_file(ZipkgConfiguration *config, const char *path) {
   toml_table_free(table);
 }
 
-static void clear_repositories(vec_char_ptr *vec) {
-  for (uint32_t i = 0; i < vec_char_ptr_len(vec); i++) {
-    free(*vec_char_ptr_at(vec, i));
+// splits a comma-separated environment value and appends each entry to `out`.
+// unlike a command line, nothing has expanded tildes for us here, so we do it.
+static void push_env_repositories(vec_char_ptr *out, const char *env) {
+  char *dup = strdup(env);
+  for (char *tok = strtok(dup, ","); tok != NULL; tok = strtok(NULL, ",")) {
+    if (*tok == '\0') {
+      continue;
+    }
+    char_ptr repo = expandtilde(tok);
+    vec_char_ptr_push(out, &repo);
   }
-  vec_char_ptr_clear(vec);
+  free(dup);
 }
 
-static void resolve_configuration(ZipkgConfiguration *config,
+static void apply_env_config(ZpkConfiguration *config) {
+  const char *env = getenv("ZPK_SYSROOT");
+  if (env != NULL) {
+    free(config->sysroot);
+    config->sysroot = expandtilde(env);
+  }
+
+  env = getenv("ZPK_PKGS_PATH");
+  if (env != NULL) {
+    free(config->pkgs_path);
+    config->pkgs_path = expandtilde(env);
+  }
+
+  // comma-separated list; replaces any file-configured repositories
+  env = getenv("ZPK_REPOSITORIES");
+  if (env != NULL) {
+    truncate_stringvec(config->repositories);
+    push_env_repositories(config->repositories, env);
+  }
+
+  // comma-separated list; extends any file-configured repositories
+  env = getenv("ZPK_EXTRA_REPOSITORIES");
+  if (env != NULL) {
+    push_env_repositories(config->repositories, env);
+  }
+}
+
+static void resolve_configuration(ZpkConfiguration *config,
                                   const char *cli_config,
                                   const char *cli_sysroot,
-                                  vec_char_ptr *cli_repositories) {
+                                  vec_char_ptr *cli_extra_repositories) {
   config->sysroot = NULL;
   config->pkgs_path = NULL;
   vec_char_ptr_new(&config->repositories);
 
-  if (cli_config != NULL) {
-    apply_config_file(config, cli_config);
-  } else {
-    char *local_path = find_local_config();
-    const char *path = local_path;
-    if (path == NULL) {
-      path = GLOBAL_CONFIG_PATH;
-    }
-    if (path != NULL) {
-      apply_config_file(config, path);
-    }
-    free(local_path);
+  // we check in reverse order of precedence, so that later sources override
+  // earlier ones.
+
+  // 6. system config file
+  if (!cli_config) {
+    maybe_apply_config_file(config, SYSTEM_CONFIG_PATH, false);
   }
 
-  const char *env = getenv("ZIPKG_SYSROOT");
-  if (env != NULL) {
-    free(config->sysroot);
-    config->sysroot = strdup(env);
+  // 5. user config file
+  if (!cli_config) {
+    char *user_config_path_expanded = expandtilde(USER_CONFIG_PATH);
+    maybe_apply_config_file(config, user_config_path_expanded, false);
+    free(user_config_path_expanded);
   }
 
-  env = getenv("ZIPKG_PKGS_PATH");
-  if (env != NULL) {
-    free(config->pkgs_path);
-    config->pkgs_path = strdup(env);
-  }
-
-  // comma-separated list; replaces any file-configured repositories
-  env = getenv("ZIPKG_REPOSITORIES");
-  if (env != NULL) {
-    clear_repositories(config->repositories);
-    char *dup = strdup(env);
-    for (char *tok = strtok(dup, ","); tok != NULL; tok = strtok(NULL, ",")) {
-      if (*tok == '\0') {
+  // 4. path walk local config files (eg, local directory and up the tree)
+  // we're doing reverse precedence, so we start at the root and work our way
+  // down to the current directory, so that the current directory's config
+  // overrides any parent directories.
+  if (!cli_config) {
+    char *cwd = getcwd_portable();
+    size_t cwd_len = strlen(cwd);
+    // visit every directory prefix of the cwd, shallowest first: "", "/home",
+    // "/home/user", ... and finally the cwd itself, hence i <= cwd_len. the
+    // empty prefix is the filesystem root, since the "%s/%s" supplies the
+    // separator.
+    for (size_t i = 0; i <= cwd_len; i++) {
+      bool at_end = i == cwd_len;
+      if (!at_end && cwd[i] != '/') {
         continue;
       }
-      char_ptr repo = strdup(tok);
-      vec_char_ptr_push(config->repositories, &repo);
+      // a cwd of "/" is already covered by the i == 0 prefix
+      if (at_end && cwd_len > 0 && cwd[cwd_len - 1] == '/') {
+        break;
+      }
+      cwd[i] = '\0';
+      char *config_path =
+          (char *)malloc(i + 1 + strlen(CONFIGURATION_FILE_NAME) + 1);
+      sprintf(config_path, "%s/%s", cwd, CONFIGURATION_FILE_NAME);
+      maybe_apply_config_file(config, config_path, false);
+      free(config_path);
+      if (!at_end) {
+        cwd[i] = '/';
+      }
     }
-    free(dup);
+    free(cwd);
   }
 
-  // command-line overrides win over everything; -X appends (like apk) rather
-  // than replacing
+  // 3. cli specified config file
+  // no need to expand tilde, because the shell should have done that for us
+  // when it passed the path to us.
+  if (cli_config != NULL) {
+    maybe_apply_config_file(config, cli_config, true);
+  }
+
+  // 2. environment variables
+  apply_env_config(config);
+
+  // 1. cli specified sysroot + repositories
   if (cli_sysroot != NULL) {
     free(config->sysroot);
     config->sysroot = strdup(cli_sysroot);
-  }
-  for (uint32_t i = 0; i < vec_char_ptr_len(cli_repositories); i++) {
-    vec_char_ptr_push(config->repositories,
-                      vec_char_ptr_at(cli_repositories, i));
   }
 
   if (config->sysroot == NULL) {
@@ -151,17 +242,25 @@ static void resolve_configuration(ZipkgConfiguration *config,
     snprintf(config->pkgs_path, sysroot_len + sizeof "/pkg",
              trailing_slash ? "%spkg" : "%s/pkg", config->sysroot);
   }
+  if (cli_extra_repositories != NULL) {
+    // we follow APK semantics in that -X/--repository appends to the list of
+    // repositories, rather than replacing it. so we append the cli-specified
+    // repositories to the end of the list.
+    for (uint32_t i = 0; i < vec_char_ptr_len(cli_extra_repositories); i++) {
+      char_ptr repo = strdup(*vec_char_ptr_at(cli_extra_repositories, i));
+      vec_char_ptr_push(config->repositories, &repo);
+    }
+  }
 }
 
-void delete_ZipkgConfiguration(ZipkgConfiguration *config) {
+void delete_ZpkConfiguration(ZpkConfiguration *config) {
   free(config->sysroot);
   free(config->pkgs_path);
-  clear_repositories(config->repositories);
-  vec_char_ptr_delete(&config->repositories);
+  delete_stringvec(&config->repositories);
 }
 
 static const char *USAGE =
-    "usage: zipkg [options] <command> [args]\n"
+    "usage: zpk [options] <command> [args]\n"
     "\n"
     "commands:\n"
     "  add <pkg>...             install packages\n"
@@ -175,8 +274,35 @@ static const char *USAGE =
     "global options:\n"
     "  -p, --root DIR           install to alternate root\n"
     "  -X, --repository URI     add a repository (repeatable)\n"
-    "      --config FILE        use FILE instead of searching for .zipkg.ini\n"
+    "      --config FILE        use FILE instead of searching for .zpk.ini\n"
+    "  -v, --verbose            raise log level to info; -vv for debug\n"
     "  -h, --help               show this help\n";
+
+// matches -v, -vv, -vvv, ..., returning how many v's it found, or 0 if `arg` is
+// not one of those
+static int count_verbose_flag(const char *arg) {
+  if (arg[0] != '-') {
+    return 0;
+  }
+  int n = 0;
+  for (const char *p = arg + 1; *p != '\0'; p++) {
+    if (*p != 'v') {
+      return 0;
+    }
+    n++;
+  }
+  return n;
+}
+
+static ErrSeverity verbosity_to_level(int verbosity) {
+  if (verbosity <= 0) {
+    return ERR_LEVEL_WARN;
+  }
+  if (verbosity == 1) {
+    return ERR_LEVEL_INFO;
+  }
+  return ERR_LEVEL_DEBUG;
+}
 
 // consumes the next argv element as the value of option argv[*i]
 static char *opt_value(int argc, char **argv, int *i) {
@@ -188,28 +314,28 @@ static char *opt_value(int argc, char **argv, int *i) {
   return argv[*i];
 }
 
-static ZipkgOpKind lookup_command(const char *name) {
+static ZpkOpKind lookup_command(const char *name) {
   if (strcmp(name, "add") == 0)
-    return ZIPKG_OP_ADD;
+    return ZPK_OP_ADD;
   if (strcmp(name, "fetch") == 0)
-    return ZIPKG_OP_FETCH;
+    return ZPK_OP_FETCH;
   if (strcmp(name, "del") == 0)
-    return ZIPKG_OP_DEL;
+    return ZPK_OP_DEL;
   if (strcmp(name, "upgrade") == 0)
-    return ZIPKG_OP_UPGRADE;
+    return ZPK_OP_UPGRADE;
   if (strcmp(name, "fix") == 0)
-    return ZIPKG_OP_FIX;
+    return ZPK_OP_FIX;
   if (strcmp(name, "list") == 0)
-    return ZIPKG_OP_LIST;
+    return ZPK_OP_LIST;
   if (strcmp(name, "info") == 0)
-    return ZIPKG_OP_OWNER;
-  LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "unknown command '%s' (see 'zipkg --help')",
+    return ZPK_OP_OWNER;
+  LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "unknown command '%s' (see 'zpk --help')",
                  name);
   PANIC();
 }
 
-void parse_args(int argc, char **argv, ZipkgConfiguration *config,
-                ZipkgOperation *op) {
+void parse_args(int argc, char **argv, ZpkConfiguration *config,
+                ZpkOperation *op) {
   const char *cli_sysroot = NULL;
   const char *cli_config = NULL;
   const char *fetch_output = NULL;
@@ -219,15 +345,17 @@ void parse_args(int argc, char **argv, ZipkgConfiguration *config,
   bool info_who_owns = false;
   bool have_op = false;
   bool no_more_options = false;
-  ZipkgOpKind kind = ZIPKG_OP_ADD; // overwritten when the command is seen
+  int verbosity = 0;
+  ZpkOpKind kind = ZPK_OP_ADD; // overwritten when the command is seen
 
-  vec_char_ptr *cli_repositories;
-  vec_char_ptr_new(&cli_repositories);
+  vec_char_ptr *cli_extra_repositories;
+  vec_char_ptr_new(&cli_extra_repositories);
   vec_char_ptr *targets;
   vec_char_ptr_new(&targets);
 
   for (int i = 1; i < argc; i++) {
     char *arg = argv[i];
+    int nverbose = count_verbose_flag(arg);
 
     if (no_more_options || arg[0] != '-' || arg[1] == '\0') {
       if (!have_op) {
@@ -249,47 +377,52 @@ void parse_args(int argc, char **argv, ZipkgConfiguration *config,
       cli_sysroot = opt_value(argc, argv, &i);
     } else if (strcmp(arg, "-X") == 0 || strcmp(arg, "--repository") == 0) {
       char_ptr repo = strdup(opt_value(argc, argv, &i));
-      vec_char_ptr_push(cli_repositories, &repo);
+      vec_char_ptr_push(cli_extra_repositories, &repo);
     } else if (strcmp(arg, "--config") == 0) {
       cli_config = opt_value(argc, argv, &i);
-    } else if (have_op && kind == ZIPKG_OP_FETCH &&
+    } else if (nverbose > 0 || strcmp(arg, "--verbose") == 0) {
+      verbosity += nverbose > 0 ? nverbose : 1;
+      // applied immediately, so that everything after this point -- including
+      // the config file search -- logs at the requested level
+      zpk_log_level = verbosity_to_level(verbosity);
+    } else if (have_op && kind == ZPK_OP_FETCH &&
                (strcmp(arg, "-o") == 0 || strcmp(arg, "--output") == 0)) {
       fetch_output = opt_value(argc, argv, &i);
-    } else if (have_op && kind == ZIPKG_OP_LIST &&
+    } else if (have_op && kind == ZPK_OP_LIST &&
                (strcmp(arg, "-I") == 0 || strcmp(arg, "--installed") == 0)) {
       list_installed = true;
-    } else if (have_op && kind == ZIPKG_OP_LIST &&
+    } else if (have_op && kind == ZPK_OP_LIST &&
                (strcmp(arg, "-u") == 0 || strcmp(arg, "--upgradable") == 0)) {
       list_upgradable = true;
-    } else if (have_op && kind == ZIPKG_OP_LIST &&
+    } else if (have_op && kind == ZPK_OP_LIST &&
                (strcmp(arg, "-a") == 0 || strcmp(arg, "--available") == 0)) {
       list_available = true;
-    } else if (have_op && kind == ZIPKG_OP_OWNER &&
+    } else if (have_op && kind == ZPK_OP_OWNER &&
                (strcmp(arg, "-W") == 0 || strcmp(arg, "--who-owns") == 0)) {
       info_who_owns = true;
     } else {
       LOG_ERROR_ARGS(ERR_LEVEL_FATAL,
-                     "unrecognized option '%s' (see 'zipkg --help')", arg);
+                     "unrecognized option '%s' (see 'zpk --help')", arg);
       PANIC();
     }
   }
 
   if (!have_op) {
-    LOG_ERROR(ERR_LEVEL_FATAL, "no operation specified (see 'zipkg --help')");
+    LOG_ERROR(ERR_LEVEL_FATAL, "no operation specified (see 'zpk --help')");
     PANIC();
   }
 
   uint32_t ntargets = vec_char_ptr_len(targets);
   switch (kind) {
-  case ZIPKG_OP_ADD:
-  case ZIPKG_OP_DEL:
-  case ZIPKG_OP_FETCH:
+  case ZPK_OP_ADD:
+  case ZPK_OP_DEL:
+  case ZPK_OP_FETCH:
     if (ntargets == 0) {
       LOG_ERROR(ERR_LEVEL_FATAL, "at least one package required");
       PANIC();
     }
     break;
-  case ZIPKG_OP_OWNER:
+  case ZPK_OP_OWNER:
     if (!info_who_owns) {
       LOG_ERROR(ERR_LEVEL_FATAL, "'info' supports only -W/--who-owns");
       PANIC();
@@ -299,7 +432,7 @@ void parse_args(int argc, char **argv, ZipkgConfiguration *config,
       PANIC();
     }
     break;
-  case ZIPKG_OP_LIST:
+  case ZPK_OP_LIST:
     if (ntargets != 0) {
       LOG_ERROR(ERR_LEVEL_FATAL, "'list' takes no arguments");
       PANIC();
@@ -309,34 +442,34 @@ void parse_args(int argc, char **argv, ZipkgConfiguration *config,
     break;
   }
 
-  // args are fully validated; only now touch the filesystem. ownership of the
-  // -X strings moves into config->repositories
-  resolve_configuration(config, cli_config, cli_sysroot, cli_repositories);
-  vec_char_ptr_delete(&cli_repositories);
+  // args are fully validated; only now touch the filesystem. resolve_configuration
+  // copies the -X strings, so we still own these
+  resolve_configuration(config, cli_config, cli_sysroot, cli_extra_repositories);
+  delete_stringvec(&cli_extra_repositories);
 
   op->op = kind;
   switch (kind) {
-  case ZIPKG_OP_ADD:
+  case ZPK_OP_ADD:
     op->add.targets = targets;
     break;
-  case ZIPKG_OP_DEL:
+  case ZPK_OP_DEL:
     op->del.targets = targets;
     break;
-  case ZIPKG_OP_UPGRADE:
+  case ZPK_OP_UPGRADE:
     op->upgrade.targets = targets;
     break;
-  case ZIPKG_OP_FIX:
+  case ZPK_OP_FIX:
     op->fix.targets = targets;
     break;
-  case ZIPKG_OP_FETCH:
+  case ZPK_OP_FETCH:
     op->fetch.targets = targets;
     op->fetch.output_dir = strdup(fetch_output != NULL ? fetch_output : ".");
     break;
-  case ZIPKG_OP_OWNER:
+  case ZPK_OP_OWNER:
     op->owner.path = *vec_char_ptr_at(targets, 0);
     vec_char_ptr_delete(&targets);
     break;
-  case ZIPKG_OP_LIST:
+  case ZPK_OP_LIST:
     // bare `list` means everything, like apk
     if (!list_installed && !list_upgradable && !list_available) {
       list_available = true;
@@ -349,40 +482,25 @@ void parse_args(int argc, char **argv, ZipkgConfiguration *config,
   }
 }
 
-void delete_ZipkgOperation(ZipkgOperation *op) {
+void delete_ZpkOperation(ZpkOperation *op) {
   switch (op->op) {
-  case ZIPKG_OP_ADD:
-    for (size_t i = 0; i < vec_char_ptr_len(op->add.targets); i++) {
-      free(*vec_char_ptr_at(op->add.targets, i));
-    }
-    vec_char_ptr_delete(&op->add.targets);
+  case ZPK_OP_ADD:
+    delete_stringvec(&op->add.targets);
     break;
-  case ZIPKG_OP_DEL:
-    for (size_t i = 0; i < vec_char_ptr_len(op->del.targets); i++) {
-      free(*vec_char_ptr_at(op->del.targets, i));
-    }
-    vec_char_ptr_delete(&op->del.targets);
+  case ZPK_OP_DEL:
+    delete_stringvec(&op->del.targets);
     break;
-  case ZIPKG_OP_UPGRADE:
-    for (size_t i = 0; i < vec_char_ptr_len(op->upgrade.targets); i++) {
-      free(*vec_char_ptr_at(op->upgrade.targets, i));
-    }
-    vec_char_ptr_delete(&op->upgrade.targets);
+  case ZPK_OP_UPGRADE:
+    delete_stringvec(&op->upgrade.targets);
     break;
-  case ZIPKG_OP_FIX:
-    for (size_t i = 0; i < vec_char_ptr_len(op->fix.targets); i++) {
-      free(*vec_char_ptr_at(op->fix.targets, i));
-    }
-    vec_char_ptr_delete(&op->fix.targets);
+  case ZPK_OP_FIX:
+    delete_stringvec(&op->fix.targets);
     break;
-  case ZIPKG_OP_FETCH:
-    for (size_t i = 0; i < vec_char_ptr_len(op->fetch.targets); i++) {
-      free(*vec_char_ptr_at(op->fetch.targets, i));
-    }
-    vec_char_ptr_delete(&op->fetch.targets);
+  case ZPK_OP_FETCH:
+    delete_stringvec(&op->fetch.targets);
     free(op->fetch.output_dir);
     break;
-  case ZIPKG_OP_OWNER:
+  case ZPK_OP_OWNER:
     free(op->owner.path);
     break;
   default:

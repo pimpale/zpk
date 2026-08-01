@@ -8,6 +8,8 @@
 
 #include "error.h"
 
+ErrSeverity zpk_log_level = ERR_LEVEL_WARN;
+
 const char *levelstrerror(ErrSeverity level) {
   switch (level) {
   case ERR_LEVEL_DEBUG: {

@@ -15,22 +15,22 @@ typedef struct {
   char *pkgs_path;
   // a list of repositories (in URI format)
   vec_char_ptr* repositories;
-} ZipkgConfiguration;
+} ZpkConfiguration;
 
-void delete_ZipkgConfiguration(ZipkgConfiguration *config);
+void delete_ZpkConfiguration(ZpkConfiguration *config);
 
 typedef enum {
-  ZIPKG_OP_ADD,
-  ZIPKG_OP_FETCH,
-  ZIPKG_OP_DEL,
-  ZIPKG_OP_UPGRADE,
-  ZIPKG_OP_FIX,
-  ZIPKG_OP_LIST,
-  ZIPKG_OP_OWNER
-} ZipkgOpKind;
+  ZPK_OP_ADD,
+  ZPK_OP_FETCH,
+  ZPK_OP_DEL,
+  ZPK_OP_UPGRADE,
+  ZPK_OP_FIX,
+  ZPK_OP_LIST,
+  ZPK_OP_OWNER
+} ZpkOpKind;
 
 typedef struct {
-  ZipkgOpKind op;
+  ZpkOpKind op;
   union {
     struct {
       vec_char_ptr* targets;
@@ -57,18 +57,18 @@ typedef struct {
       char *path;
     } owner;
   };
-} ZipkgOperation;
+} ZpkOperation;
 
 // Parses argv and resolves the effective configuration in one shot; any
 // error (bad args, unparseable config file) is fatal and exits.
 // PRECEDENCE:
 // command-line options (-p/--root, -X/--repository, --config)
 // environment variables
-// check ./.zipkg.ini, ../.zipkg.ini, etc
-// check /etc/zipkg.ini
-void parse_args(int argc, char **argv, ZipkgConfiguration *config,
-                ZipkgOperation *op);
+// check ./.zpk.ini, ../.zpk.ini, etc
+// check /etc/zpk.ini
+void parse_args(int argc, char **argv, ZpkConfiguration *config,
+                ZpkOperation *op);
 
-void delete_ZipkgOperation(ZipkgOperation *op);
+void delete_ZpkOperation(ZpkOperation *op);
 
 #endif // configuration_h_INCLUDED

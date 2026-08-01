@@ -8,7 +8,7 @@
 #endif
 
 #ifndef ERROR_APPNAME
-#define ERROR_APPNAME "zipkg"
+#define ERROR_APPNAME "zpk"
 #endif
 
 typedef enum ErrSeverity {
@@ -34,17 +34,32 @@ typedef enum ErrVal {
 
 const char *levelstrerror(ErrSeverity level);
 
+// Messages below this severity are dropped. Defaults to ERR_LEVEL_WARN; -v
+// lowers it to ERR_LEVEL_INFO and -vv to ERR_LEVEL_DEBUG. Set by parse_args as
+// soon as it sees the flag, so that config resolution logs at the right level.
+extern ErrSeverity zpk_log_level;
+
 #define UNUSED __attribute__((unused))
 #define PANIC() exit(EXIT_FAILURE)
 
+// Diagnostics always go to stderr, so that stdout carries only the data a
+// command was asked to produce and stays safe to pipe.
 #define LOG_ERROR(level, msg)                                                  \
-  printf("%s: %s: %s\n", ERROR_APPNAME, levelstrerror(level), msg)
+  do {                                                                         \
+    if ((level) >= zpk_log_level) {                                            \
+      fprintf(stderr, "%s: %s: %s\n", ERROR_APPNAME, levelstrerror(level),     \
+              msg);                                                            \
+    }                                                                          \
+  } while (0)
 
 #define LOG_ERROR_ARGS(level, fmt, ...)                                        \
   do {                                                                         \
-    char macro_message_formatted[ERROR_MAX_PRINT_LENGTH];                            \
-    snprintf(macro_message_formatted, ERROR_MAX_PRINT_LENGTH, fmt, __VA_ARGS__);     \
-    printf("%s: %s: %s\n", ERROR_APPNAME, levelstrerror(level),                      \
-           macro_message_formatted);                                           \
+    if ((level) >= zpk_log_level) {                                            \
+      char macro_message_formatted[ERROR_MAX_PRINT_LENGTH];                    \
+      snprintf(macro_message_formatted, ERROR_MAX_PRINT_LENGTH, fmt,           \
+               __VA_ARGS__);                                                   \
+      fprintf(stderr, "%s: %s: %s\n", ERROR_APPNAME, levelstrerror(level),     \
+              macro_message_formatted);                                        \
+    }                                                                          \
   } while (0)
 #endif // error_h_INCLUDED
