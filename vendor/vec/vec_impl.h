@@ -24,17 +24,17 @@
 #define VEC_FN(suffix) VEC_PASTE(VEC_T, suffix)
 
 void VEC_FN(_new)(VEC_T **pVec) {
-  VEC_T *vec = malloc(sizeof(VEC_T));
+  VEC_T *vec = (VEC_T*)malloc(sizeof(VEC_T));
   vec->len = 0;
   vec->cap = 16;
-  vec->pData = malloc(vec->cap * sizeof(VEC_DTYPE));
+  vec->pData = (VEC_DTYPE*)malloc(vec->cap * sizeof(VEC_DTYPE));
   *pVec = vec;
 }
 
 void VEC_FN(_push)(VEC_T *vec, const VEC_DTYPE *src) {
   if (vec->len >= vec->cap) {
     vec->cap *= 2;
-    vec->pData = realloc(vec->pData, vec->cap * sizeof(VEC_DTYPE));
+    vec->pData = (VEC_DTYPE*)realloc(vec->pData, vec->cap * sizeof(VEC_DTYPE));
   }
   vec->pData[vec->len] = *src;
   vec->len++;

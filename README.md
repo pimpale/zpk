@@ -32,9 +32,10 @@ Your system should look like this:
 ```
 /usr
 /whatever
-/pkg
+/pkg      ; contains only installed packages
 /pkg/somepackage1.zip
 /pkg/somepackage2.zip
+/cache/
 ```
 
 When we search f
