@@ -3,7 +3,7 @@
 
 #include "instances/vec_char_ptr.h"
 
-char* expandtilde(const char* input);
+const char* getenv_home_portable(void);
 char* getcwd_portable(void);
 int mkdir_portable(const char* path, int mode);
 int rmdir_portable(const char* path);

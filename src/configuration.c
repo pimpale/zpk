@@ -2,6 +2,7 @@
 
 #include "constants.h"
 #include "error.h"
+#include "pathutils.h"
 #include "oscompatlayer.h"
 
 #include <errno.h>
@@ -272,6 +273,16 @@ static void resolve_configuration(ZpkConfiguration *config,
     snprintf(config->pkgs_path, sysroot_len + sizeof "/pkg",
              trailing_slash ? "%spkg" : "%s/pkg", config->sysroot);
   }
+  // sysroot and pkgs_path are assembled from joins that can leave "."
+  // components or doubled slashes behind (e.g. "$cwd/./zpkroot"); clean them
+  // once here so every path later joined onto them stays clean
+  char *cleaned = cleanpath(config->sysroot);
+  free(config->sysroot);
+  config->sysroot = cleaned;
+  cleaned = cleanpath(config->pkgs_path);
+  free(config->pkgs_path);
+  config->pkgs_path = cleaned;
+
   if (cli_extra_repositories != NULL) {
     // we follow APK semantics in that -X/--repository appends to the list of
     // repositories, rather than replacing it. so we append the cli-specified
