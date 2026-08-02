@@ -13,18 +13,20 @@ static void do_fetch(ZpkConfiguration *pConf, vec_char_ptr *pTargets,
   (void)path;
 }
 
-static void do_add(ZpkConfiguration *pConf, vec_char_ptr *pTargets) {
+static void do_add(ZpkConfiguration *pConf, vec_char_ptr *pTargets,
+                   bool dry_run) {
   do_fetch(pConf, pTargets, pConf->pkgs_path);
   LOG_ERROR_ARGS(ERR_LEVEL_INFO, "installing %zu targets to %s",
                  vec_char_ptr_len(pTargets), pConf->sysroot);
   for (size_t i = 0; i < vec_char_ptr_len(pTargets); i++) {
-    install_package(pConf, *vec_char_ptr_at(pTargets, i));
+    install_package(pConf, *vec_char_ptr_at(pTargets, i), dry_run);
   }
 }
 
-static void do_del(ZpkConfiguration *pConf, vec_char_ptr *pTargets) {
+static void do_del(ZpkConfiguration *pConf, vec_char_ptr *pTargets,
+                   bool dry_run) {
   for (size_t i = 0; i < vec_char_ptr_len(pTargets); i++) {
-    uninstall_package(pConf, *vec_char_ptr_at(pTargets, i));
+    uninstall_package(pConf, *vec_char_ptr_at(pTargets, i), dry_run);
   }
 }
 
@@ -60,14 +62,14 @@ int main(int argc, char **argv) {
 
   switch (operation.op) {
   case ZPK_OP_ADD:
-    do_add(&configuration, operation.add.targets);
+    do_add(&configuration, operation.add.targets, operation.dry_run);
     break;
   case ZPK_OP_FETCH:
     do_fetch(&configuration, operation.fetch.targets,
              operation.fetch.output_dir);
     break;
   case ZPK_OP_DEL:
-    do_del(&configuration, operation.del.targets);
+    do_del(&configuration, operation.del.targets, operation.dry_run);
     break;
   case ZPK_OP_UPGRADE:
     do_upgrade(&configuration, operation.upgrade.targets);

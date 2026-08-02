@@ -26,6 +26,7 @@ global options:
   -p, --root DIR           install to alternate root
   -X, --repository URI     add a repository (repeatable)
       --config FILE        use FILE instead of searching for .zpk.ini
+  -s, --simulate           simulate the operation; make no changes
   -v, --verbose            raise log level to info; -vv for debug
   -h, --help               show this help
 ```

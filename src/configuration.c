@@ -275,6 +275,7 @@ static const char *USAGE =
     "  -p, --root DIR           install to alternate root\n"
     "  -X, --repository URI     add a repository (repeatable)\n"
     "      --config FILE        use FILE instead of searching for .zpk.ini\n"
+    "  -s, --simulate           simulate the operation; make no changes\n"
     "  -v, --verbose            raise log level to info; -vv for debug\n"
     "  -h, --help               show this help\n";
 
@@ -345,6 +346,7 @@ void parse_args(int argc, char **argv, ZpkConfiguration *config,
   bool info_who_owns = false;
   bool have_op = false;
   bool no_more_options = false;
+  bool dry_run = false;
   int verbosity = 0;
   ZpkOpKind kind = ZPK_OP_ADD; // overwritten when the command is seen
 
@@ -380,6 +382,8 @@ void parse_args(int argc, char **argv, ZpkConfiguration *config,
       vec_char_ptr_push(cli_extra_repositories, &repo);
     } else if (strcmp(arg, "--config") == 0) {
       cli_config = opt_value(argc, argv, &i);
+    } else if (strcmp(arg, "-s") == 0 || strcmp(arg, "--simulate") == 0) {
+      dry_run = true;
     } else if (nverbose > 0 || strcmp(arg, "--verbose") == 0) {
       verbosity += nverbose > 0 ? nverbose : 1;
       // applied immediately, so that everything after this point -- including
@@ -448,6 +452,7 @@ void parse_args(int argc, char **argv, ZpkConfiguration *config,
   delete_stringvec(&cli_extra_repositories);
 
   op->op = kind;
+  op->dry_run = dry_run;
   switch (kind) {
   case ZPK_OP_ADD:
     op->add.targets = targets;

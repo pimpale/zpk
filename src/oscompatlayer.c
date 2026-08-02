@@ -7,6 +7,7 @@
 #if defined(_WIN32) || defined(_WIN64)
 #include <direct.h>
 #else
+#include <sys/stat.h>
 #include <unistd.h>
 #endif
 
@@ -55,4 +56,13 @@ char *getcwd_portable(void) {
     PANIC();
   }
   return cwd;
+}
+
+int mkdir_portable(const char *path, int mode) {
+#if defined(_WIN32) || defined(_WIN64)
+  (void)mode; // mode is ignored on Windows
+  return _mkdir(path);
+#else
+  return mkdir(path, mode);
+#endif
 }

@@ -14,7 +14,7 @@ typedef struct {
   // defaults to $sysroot/pkg
   char *pkgs_path;
   // a list of repositories (in URI format)
-  vec_char_ptr* repositories;
+  vec_char_ptr *repositories;
 } ZpkConfiguration;
 
 void delete_ZpkConfiguration(ZpkConfiguration *config);
@@ -33,20 +33,20 @@ typedef struct {
   ZpkOpKind op;
   union {
     struct {
-      vec_char_ptr* targets;
+      vec_char_ptr *targets;
     } add;
     struct {
-      vec_char_ptr* targets;
+      vec_char_ptr *targets;
       char *output_dir;
     } fetch;
     struct {
-      vec_char_ptr* targets;
+      vec_char_ptr *targets;
     } del;
     struct {
-      vec_char_ptr* targets; // no targets = all
+      vec_char_ptr *targets; // no targets = all
     } upgrade;
     struct {
-      vec_char_ptr* targets; // no targets = all
+      vec_char_ptr *targets; // no targets = all
     } fix;
     struct {
       bool installed;
@@ -57,6 +57,8 @@ typedef struct {
       char *path;
     } owner;
   };
+  bool dry_run; // if true, don't actually perform the operation, just print
+                // what would be done
 } ZpkOperation;
 
 // Parses argv and resolves the effective configuration in one shot; any
