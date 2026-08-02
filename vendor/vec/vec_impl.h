@@ -23,12 +23,10 @@
 #define VEC_T VEC_PASTE(vec_, VEC_DTYPE)
 #define VEC_FN(suffix) VEC_PASTE(VEC_T, suffix)
 
-void VEC_FN(_new)(VEC_T **pVec) {
-  VEC_T *vec = (VEC_T*)malloc(sizeof(VEC_T));
+void VEC_FN(_init)(VEC_T *vec) {
   vec->len = 0;
   vec->cap = 16;
   vec->pData = (VEC_DTYPE*)malloc(vec->cap * sizeof(VEC_DTYPE));
-  *pVec = vec;
 }
 
 void VEC_FN(_push)(VEC_T *vec, const VEC_DTYPE *src) {
@@ -48,29 +46,27 @@ void VEC_FN(_pop)(VEC_T *vec, VEC_DTYPE *dest) {
 
 void VEC_FN(_clear)(VEC_T *vec) { vec->len = 0; }
 
-void VEC_FN(_get)(const VEC_T *vec, uint32_t i, VEC_DTYPE *dest) {
+void VEC_FN(_get)(const VEC_T *vec, size_t i, VEC_DTYPE *dest) {
   assert(i < vec->len);
   *dest = vec->pData[i];
 }
 
-VEC_DTYPE *VEC_FN(_at)(VEC_T *vec, uint32_t i) {
+VEC_DTYPE *VEC_FN(_at)(VEC_T *vec, size_t i) {
   assert(i < vec->len);
   return &vec->pData[i];
 }
 
-void VEC_FN(_swap_and_pop)(VEC_T *vec, uint32_t i) {
+void VEC_FN(_swap_and_pop)(VEC_T *vec, size_t i) {
   assert(vec->len > 0);
   assert(i < vec->len);
   vec->pData[i] = vec->pData[vec->len - 1];
   vec->len--;
 }
 
-uint32_t VEC_FN(_len)(const VEC_T *vec) { return vec->len; }
+size_t VEC_FN(_len)(const VEC_T *vec) { return vec->len; }
 
-void VEC_FN(_delete)(VEC_T **pVec) {
-  free((*pVec)->pData);
-  free(*pVec);
-  *pVec = NULL;
+void VEC_FN(_delete)(VEC_T *vec) {
+  free(vec->pData);
 }
 
 #undef VEC_T

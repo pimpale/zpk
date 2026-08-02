@@ -6,7 +6,7 @@ SRC_DIRS ?= src vendor
 SRCS := $(shell find $(SRC_DIRS) -type f -name *.c)
 OBJS := $(SRCS:%=$(BUILD_DIR)/%.o)
 
-INC_DIRS := vendor
+INC_DIRS := vendor src
 INC_FLAGS := $(addprefix -I,$(INC_DIRS))
 
 DEFINES := -DMZ_PLATFORM=0

@@ -3,9 +3,7 @@
 
 #include <stdbool.h>
 
-typedef char *char_ptr;
-#define VEC_DTYPE char_ptr
-#include <vec/vec.h>
+#include "instances/vec_char_ptr.h"
 
 typedef struct {
   // where the packages are going to be installed to (defaults to /)
@@ -14,7 +12,7 @@ typedef struct {
   // defaults to $sysroot/pkg
   char *pkgs_path;
   // a list of repositories (in URI format)
-  vec_char_ptr *repositories;
+  vec_char_ptr repositories;
 } ZpkConfiguration;
 
 void delete_ZpkConfiguration(ZpkConfiguration *config);
@@ -33,20 +31,20 @@ typedef struct {
   ZpkOpKind op;
   union {
     struct {
-      vec_char_ptr *targets;
+      vec_char_ptr targets;
     } add;
     struct {
-      vec_char_ptr *targets;
+      vec_char_ptr targets;
       char *output_dir;
     } fetch;
     struct {
-      vec_char_ptr *targets;
+      vec_char_ptr targets;
     } del;
     struct {
-      vec_char_ptr *targets; // no targets = all
+      vec_char_ptr targets; // no targets = all
     } upgrade;
     struct {
-      vec_char_ptr *targets; // no targets = all
+      vec_char_ptr targets; // no targets = all
     } fix;
     struct {
       bool installed;

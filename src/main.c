@@ -62,20 +62,20 @@ int main(int argc, char **argv) {
 
   switch (operation.op) {
   case ZPK_OP_ADD:
-    do_add(&configuration, operation.add.targets, operation.dry_run);
+    do_add(&configuration, &operation.add.targets, operation.dry_run);
     break;
   case ZPK_OP_FETCH:
-    do_fetch(&configuration, operation.fetch.targets,
+    do_fetch(&configuration, &operation.fetch.targets,
              operation.fetch.output_dir);
     break;
   case ZPK_OP_DEL:
-    do_del(&configuration, operation.del.targets, operation.dry_run);
+    do_del(&configuration, &operation.del.targets, operation.dry_run);
     break;
   case ZPK_OP_UPGRADE:
-    do_upgrade(&configuration, operation.upgrade.targets);
+    do_upgrade(&configuration, &operation.upgrade.targets);
     break;
   case ZPK_OP_FIX:
-    do_fix(&configuration, operation.fix.targets);
+    do_fix(&configuration, &operation.fix.targets);
     break;
   case ZPK_OP_LIST:
     do_list(&configuration, operation.list.installed, operation.list.upgradable,

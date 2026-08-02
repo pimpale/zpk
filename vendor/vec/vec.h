@@ -32,30 +32,30 @@
 
 struct VEC_T {
   VEC_DTYPE *pData;
-  uint32_t cap;
-  uint32_t len;
+  size_t cap;
+  size_t len;
 };
 
 typedef struct VEC_T VEC_T;
 
-void VEC_FN(_new)(VEC_T **vec);
-void VEC_FN(_delete)(VEC_T **vec);
+void VEC_FN(_init)(VEC_T *vec);
+void VEC_FN(_delete)(VEC_T *vec);
 
 void VEC_FN(_push)(VEC_T *vec, const VEC_DTYPE *src);
 void VEC_FN(_pop)(VEC_T *vec, VEC_DTYPE *dest);
 
-void VEC_FN(_get)(const VEC_T *vec, uint32_t i, VEC_DTYPE *dest);
+void VEC_FN(_get)(const VEC_T *vec, size_t i, VEC_DTYPE *dest);
 
 // Pointer to element i, for in-place mutation. Invalidated by any push
 // (growth may realloc) — do not hold across mutating calls.
-VEC_DTYPE *VEC_FN(_at)(VEC_T *vec, uint32_t i);
+VEC_DTYPE *VEC_FN(_at)(VEC_T *vec, size_t i);
 
 // swaps i with the last element and then pops, deleting the data
-void VEC_FN(_swap_and_pop)(VEC_T *vec, uint32_t i);
+void VEC_FN(_swap_and_pop)(VEC_T *vec, size_t i);
 
 void VEC_FN(_clear)(VEC_T *vec);
 
-uint32_t VEC_FN(_len)(const VEC_T *vec);
+size_t VEC_FN(_len)(const VEC_T *vec);
 
 #undef VEC_T
 #undef VEC_FN

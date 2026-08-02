@@ -21,9 +21,37 @@ static void truncate_stringvec(vec_char_ptr *vec) {
   vec_char_ptr_clear(vec);
 }
 
-static void delete_stringvec(vec_char_ptr **pVec) {
-  truncate_stringvec(*pVec);
-  vec_char_ptr_delete(pVec);
+static void delete_stringvec(vec_char_ptr *vec) {
+  truncate_stringvec(vec);
+  vec_char_ptr_delete(vec);
+}
+
+// Resolves `raw` against the directory containing `config_path`, unless
+// `raw` is a URI (contains "://"), already absolute, or home-relative (~).
+// Returns a newly allocated string; caller must free.
+static char *resolve_config_relative(const char *config_path, const char *raw) {
+  if (strstr(raw, "://") != NULL) {
+    return strdup(raw);
+  }
+
+  char *expanded = expandtilde(raw); // no-op unless raw starts with ~
+  if (expanded[0] == '/') {
+    return expanded; // absolute already, or made absolute by ~ expansion
+  }
+
+  const char *last_slash = strrchr(config_path, '/');
+  if (last_slash == NULL) {
+    // config_path was a bare filename (e.g. "zpk.ini"): its directory is
+    // cwd, and `expanded` is already interpreted relative to cwd as-is.
+    return expanded;
+  }
+
+  size_t dir_len = (size_t)(last_slash - config_path);
+  char *resolved = malloc(dir_len + 1 + strlen(expanded) + 1);
+  snprintf(resolved, dir_len + 1 + strlen(expanded) + 1, "%.*s/%s",
+           (int)dir_len, config_path, expanded);
+  free(expanded);
+  return resolved;
 }
 
 static void maybe_apply_config_file(ZpkConfiguration *config, const char *path,
@@ -43,6 +71,8 @@ static void maybe_apply_config_file(ZpkConfiguration *config, const char *path,
     }
   }
 
+  LOG_ERROR_ARGS(ERR_LEVEL_DEBUG, "opened config file %s", path);
+
   TomlTable *table = toml_load_file_filename(maybe_file, path);
   fclose(maybe_file);
   if (table == NULL) {
@@ -58,7 +88,7 @@ static void maybe_apply_config_file(ZpkConfiguration *config, const char *path,
       PANIC();
     }
     free(config->sysroot);
-    config->sysroot = expandtilde(val->value.string->str);
+    config->sysroot = resolve_config_relative(path, val->value.string->str);
   }
 
   val = toml_table_get(table, "pkgs_path");
@@ -68,7 +98,7 @@ static void maybe_apply_config_file(ZpkConfiguration *config, const char *path,
       PANIC();
     }
     free(config->pkgs_path);
-    config->pkgs_path = expandtilde(val->value.string->str);
+    config->pkgs_path = resolve_config_relative(path, val->value.string->str);
   }
 
   val = toml_table_get(table, "repositories");
@@ -80,7 +110,7 @@ static void maybe_apply_config_file(ZpkConfiguration *config, const char *path,
     }
     // repositories (and not extra repositories) means that we replace any
     // existing repositories with the ones in the config file:
-    truncate_stringvec(config->repositories);
+    truncate_stringvec(&config->repositories);
     for (size_t i = 0; i < val->value.array->len; i++) {
       TomlValue *elem = val->value.array->elements[i];
       if (elem->type != TOML_STRING) {
@@ -88,8 +118,8 @@ static void maybe_apply_config_file(ZpkConfiguration *config, const char *path,
                        path);
         PANIC();
       }
-      char_ptr repo = expandtilde(elem->value.string->str);
-      vec_char_ptr_push(config->repositories, &repo);
+      char_ptr repo = resolve_config_relative(path, elem->value.string->str);
+      vec_char_ptr_push(&config->repositories, &repo);
     }
   }
 
@@ -105,12 +135,12 @@ static void maybe_apply_config_file(ZpkConfiguration *config, const char *path,
     for (size_t i = 0; i < val->value.array->len; i++) {
       TomlValue *elem = val->value.array->elements[i];
       if (elem->type != TOML_STRING) {
-        LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "%s: repositories must be strings",
+        LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "%s: extra-repositories must be strings",
                        path);
         PANIC();
       }
-      char_ptr repo = expandtilde(elem->value.string->str);
-      vec_char_ptr_push(config->repositories, &repo);
+      char_ptr repo = resolve_config_relative(path, elem->value.string->str);
+      vec_char_ptr_push(&config->repositories, &repo);
     }
   }
 
@@ -147,14 +177,14 @@ static void apply_env_config(ZpkConfiguration *config) {
   // comma-separated list; replaces any file-configured repositories
   env = getenv("ZPK_REPOSITORIES");
   if (env != NULL) {
-    truncate_stringvec(config->repositories);
-    push_env_repositories(config->repositories, env);
+    truncate_stringvec(&config->repositories);
+    push_env_repositories(&config->repositories, env);
   }
 
   // comma-separated list; extends any file-configured repositories
   env = getenv("ZPK_EXTRA_REPOSITORIES");
   if (env != NULL) {
-    push_env_repositories(config->repositories, env);
+    push_env_repositories(&config->repositories, env);
   }
 }
 
@@ -164,7 +194,7 @@ static void resolve_configuration(ZpkConfiguration *config,
                                   vec_char_ptr *cli_extra_repositories) {
   config->sysroot = NULL;
   config->pkgs_path = NULL;
-  vec_char_ptr_new(&config->repositories);
+  vec_char_ptr_init(&config->repositories);
 
   // we check in reverse order of precedence, so that later sources override
   // earlier ones.
@@ -248,7 +278,7 @@ static void resolve_configuration(ZpkConfiguration *config,
     // repositories to the end of the list.
     for (uint32_t i = 0; i < vec_char_ptr_len(cli_extra_repositories); i++) {
       char_ptr repo = strdup(*vec_char_ptr_at(cli_extra_repositories, i));
-      vec_char_ptr_push(config->repositories, &repo);
+      vec_char_ptr_push(&config->repositories, &repo);
     }
   }
 }
@@ -350,10 +380,10 @@ void parse_args(int argc, char **argv, ZpkConfiguration *config,
   int verbosity = 0;
   ZpkOpKind kind = ZPK_OP_ADD; // overwritten when the command is seen
 
-  vec_char_ptr *cli_extra_repositories;
-  vec_char_ptr_new(&cli_extra_repositories);
-  vec_char_ptr *targets;
-  vec_char_ptr_new(&targets);
+  vec_char_ptr cli_extra_repositories;
+  vec_char_ptr_init(&cli_extra_repositories);
+  vec_char_ptr targets;
+  vec_char_ptr_init(&targets);
 
   for (int i = 1; i < argc; i++) {
     char *arg = argv[i];
@@ -365,7 +395,7 @@ void parse_args(int argc, char **argv, ZpkConfiguration *config,
         have_op = true;
       } else {
         char_ptr target = strdup(arg);
-        vec_char_ptr_push(targets, &target);
+        vec_char_ptr_push(&targets, &target);
       }
       continue;
     }
@@ -379,7 +409,7 @@ void parse_args(int argc, char **argv, ZpkConfiguration *config,
       cli_sysroot = opt_value(argc, argv, &i);
     } else if (strcmp(arg, "-X") == 0 || strcmp(arg, "--repository") == 0) {
       char_ptr repo = strdup(opt_value(argc, argv, &i));
-      vec_char_ptr_push(cli_extra_repositories, &repo);
+      vec_char_ptr_push(&cli_extra_repositories, &repo);
     } else if (strcmp(arg, "--config") == 0) {
       cli_config = opt_value(argc, argv, &i);
     } else if (strcmp(arg, "-s") == 0 || strcmp(arg, "--simulate") == 0) {
@@ -416,7 +446,7 @@ void parse_args(int argc, char **argv, ZpkConfiguration *config,
     PANIC();
   }
 
-  uint32_t ntargets = vec_char_ptr_len(targets);
+  uint32_t ntargets = vec_char_ptr_len(&targets);
   switch (kind) {
   case ZPK_OP_ADD:
   case ZPK_OP_DEL:
@@ -448,7 +478,7 @@ void parse_args(int argc, char **argv, ZpkConfiguration *config,
 
   // args are fully validated; only now touch the filesystem. resolve_configuration
   // copies the -X strings, so we still own these
-  resolve_configuration(config, cli_config, cli_sysroot, cli_extra_repositories);
+  resolve_configuration(config, cli_config, cli_sysroot, &cli_extra_repositories);
   delete_stringvec(&cli_extra_repositories);
 
   op->op = kind;
@@ -471,7 +501,7 @@ void parse_args(int argc, char **argv, ZpkConfiguration *config,
     op->fetch.output_dir = strdup(fetch_output != NULL ? fetch_output : ".");
     break;
   case ZPK_OP_OWNER:
-    op->owner.path = *vec_char_ptr_at(targets, 0);
+    op->owner.path = *vec_char_ptr_at(&targets, 0);
     vec_char_ptr_delete(&targets);
     break;
   case ZPK_OP_LIST:
