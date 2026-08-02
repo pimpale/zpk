@@ -5,7 +5,9 @@
 #include "fsops.h"
 
 static void do_fetch(ZpkConfiguration *pConf, vec_char_ptr *pTargets,
-                    char *path) {
+                     char *path) {
+  LOG_ERROR_ARGS(ERR_LEVEL_INFO, "fetching %zu targets to %s",
+                 vec_char_ptr_len(pTargets), path);
   (void)pConf;
   (void)pTargets;
   (void)path;
@@ -13,6 +15,8 @@ static void do_fetch(ZpkConfiguration *pConf, vec_char_ptr *pTargets,
 
 static void do_add(ZpkConfiguration *pConf, vec_char_ptr *pTargets) {
   do_fetch(pConf, pTargets, pConf->pkgs_path);
+  LOG_ERROR_ARGS(ERR_LEVEL_INFO, "installing %zu targets to %s",
+                 vec_char_ptr_len(pTargets), pConf->sysroot);
   for (size_t i = 0; i < vec_char_ptr_len(pTargets); i++) {
     install_package(pConf, *vec_char_ptr_at(pTargets, i));
   }
@@ -36,7 +40,7 @@ static void do_fix(ZpkConfiguration *pConf, vec_char_ptr *pTargets) {
 }
 
 static void do_list(ZpkConfiguration *pConf, bool installed, bool upgradable,
-                   bool available) {
+                    bool available) {
   (void)pConf;
   (void)installed;
   (void)upgradable;
@@ -60,7 +64,7 @@ int main(int argc, char **argv) {
     break;
   case ZPK_OP_FETCH:
     do_fetch(&configuration, operation.fetch.targets,
-            operation.fetch.output_dir);
+             operation.fetch.output_dir);
     break;
   case ZPK_OP_DEL:
     do_del(&configuration, operation.del.targets);
@@ -73,7 +77,7 @@ int main(int argc, char **argv) {
     break;
   case ZPK_OP_LIST:
     do_list(&configuration, operation.list.installed, operation.list.upgradable,
-           operation.list.available);
+            operation.list.available);
     break;
   case ZPK_OP_OWNER:
     do_owner(&configuration, operation.owner.path);
