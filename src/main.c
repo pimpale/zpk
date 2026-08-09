@@ -24,8 +24,14 @@ static int do_add(ZpkConfiguration *pConf, vec_char_ptr *packages,
 
   // resolve packages to install
   vec_char_ptr package_paths;
-  resolve_package_paths(&package_paths, &pConf->repositories, packages);
+  vec_char_ptr_init(&package_paths);
   defer vec_char_ptr_delete_and_freeowned(&package_paths);
+
+  if (resolve_package_paths(&package_paths, &pConf->repositories, packages) !=
+      ERR_OK) {
+    LOG_ERROR(ERR_LEVEL_FATAL, "failed to resolve package paths");
+    PANIC();
+  }
 
   for (size_t i = 0; i < n_targets; i++) {
     char *package = *vec_char_ptr_at(packages, i);
@@ -56,6 +62,8 @@ static int do_del(ZpkConfiguration *pConf, vec_char_ptr *packages,
 
   // resolve packages to remove
   vec_char_ptr package_paths;
+  vec_char_ptr_init(&package_paths);
+  defer vec_char_ptr_delete_and_freeowned(&package_paths);
 
   // we only look at packages that are actually installed
   vec_char_ptr installedrepo;
@@ -64,8 +72,13 @@ static int do_del(ZpkConfiguration *pConf, vec_char_ptr *packages,
   // no ownership over pkgs path so no freeowned
   defer vec_char_ptr_delete(&installedrepo);
 
-  resolve_package_paths(&package_paths, &installedrepo, packages);
-  defer vec_char_ptr_delete_and_freeowned(&package_paths);
+  if (resolve_package_paths(&package_paths, &pConf->repositories, packages) !=
+      ERR_OK) {
+    LOG_ERROR(
+        ERR_LEVEL_FATAL,
+        "failed to resolve package paths. The packages may not be installed.");
+    PANIC();
+  }
 
   // build index
   llrb_path_indexdata index;

@@ -4,19 +4,20 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "apkver/apkver.h"
 #include "constants.h"
 #include "error.h"
 #include "fsops.h"
+#include "instances/llrb_char_ptr_fileclaim.h"
 #include "instances/llrb_path_indexdata.h"
 #include "instances/vec_char_ptr.h"
 #include "miniz/miniz.h"
 #include "oscompatlayer.h"
 
 // normalize the filename by dropping "." components and empty components
-// (leading, doubled, and trailing slashes — though a single trailing slash is
-// kept so directory entries stay recognizable). if the filename is bad (has a
+// (leading, doubled, and trailing slashes). if the filename is bad (has a
 // ".." component, contains a backslash, or normalizes to nothing) then return
 // NULL. caller must free the returned string if it is not NULL
 static char *normalize(const char *filename) {
@@ -67,7 +68,12 @@ static char *normalize(const char *filename) {
     free(out);
     return NULL;
   }
+  // omit trailing / for normalization purposes
+  if (out[out_len - 1] == '/') {
+    out_len--;
+  }
   out[out_len] = '\0';
+
   return out;
 }
 
@@ -78,6 +84,143 @@ static bool endswith(const char *str, const char *suffix) {
     return false;
   }
   return strcmp(str + (len - suflen), suffix) == 0;
+}
+
+// free a claims tree including its path keys
+static void delete_file_claims(llrb_char_ptr_fileclaim *claims) {
+  llrb_char_ptr_fileclaim_iter iter;
+  llrb_char_ptr_fileclaim_iter_begin(claims, &iter);
+  char_ptr path;
+  FileClaim claim;
+  while (llrb_char_ptr_fileclaim_iter_next(&iter, &path, &claim)) {
+    free(path);
+  }
+  llrb_char_ptr_fileclaim_delete(claims);
+}
+
+// insert one claim, taking ownership of path (freed here when not kept).
+// duplicate directory claims collapse silently (implied parents repeat for
+// every file below them); any duplicate involving a file claim means the zip
+// claims one path as two files or as both file and directory — reject
+static bool insert_file_claim(llrb_char_ptr_fileclaim *claims, const char *op,
+                              const char *package, char *path,
+                              const FileClaim *claim) {
+  FileClaim *existing = NULL;
+  if (!llrb_char_ptr_fileclaim_get_ref(claims, &path, &existing)) {
+    // the tree now owns `path`
+    llrb_char_ptr_fileclaim_insert(claims, &path, claim);
+    return true;
+  }
+  bool compatible = existing->is_directory && claim->is_directory;
+  if (!compatible) {
+    LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "%s %s: path %s claimed as %s and as %s",
+                   op, package, path,
+                   existing->is_directory ? "directory" : "file",
+                   claim->is_directory ? "directory" : "file");
+  }
+  free(path);
+  return compatible;
+}
+
+static bool collect_one_claim(mz_zip_archive *zip, mz_uint i, const char *op,
+                              const char *package,
+                              llrb_char_ptr_fileclaim *claims) {
+  mz_zip_archive_file_stat file_stat;
+  if (!mz_zip_reader_file_stat(zip, i, &file_stat)) {
+    LOG_ERROR_ARGS(ERR_LEVEL_ERROR,
+                   "%s %s: could not get file stat for file %u in zip: %s", op,
+                   package, i,
+                   mz_zip_get_error_string(mz_zip_get_last_error(zip)));
+    return false;
+  }
+
+  mz_uint need = mz_zip_reader_get_filename(zip, i, NULL, 0);
+  char *name = malloc(need);
+  defer free(name);
+  mz_zip_reader_get_filename(zip, i, name, need);
+
+  char *normalized = normalize(name);
+  if (normalized == NULL) {
+    LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "%s %s: invalid filename %s", op, package,
+                   name);
+    return false;
+  }
+  if (strcmp(normalized, name) != 0) {
+    LOG_ERROR_ARGS(ERR_LEVEL_INFO, "%s %s: normalized filename %s to %s", op,
+                   package, name, normalized);
+  }
+  if (!file_stat.m_is_directory && !file_stat.m_is_supported) {
+    LOG_ERROR_ARGS(ERR_LEVEL_ERROR,
+                   "%s %s: file %s is encrypted or uses an unsupported "
+                   "compression method",
+                   op, package, normalized);
+    return false;
+  }
+
+  // implied parent directories, outermost first
+  for (char *p = normalized; *p != '\0'; p++) {
+    if (*p != '/') {
+      continue;
+    }
+    *p = '\0';
+    char *parent = strdup(normalized);
+    *p = '/';
+    FileClaim parent_claim = {.is_directory = true};
+    if (!insert_file_claim(claims, op, package, parent, &parent_claim)) {
+      free(normalized);
+      return false;
+    }
+  }
+
+  FileClaim claim = {
+      .file_index = i,
+      .crc32 = file_stat.m_is_directory ? 0 : file_stat.m_crc32,
+      .is_directory = file_stat.m_is_directory,
+  };
+  return insert_file_claim(claims, op, package, normalized, &claim);
+}
+
+// collect all explicit (listed in zip) and implicit (parent directory) claims.
+//
+static void collect_file_claims(mz_zip_archive *zip, const char *op,
+                                const char *package,
+                                llrb_char_ptr_fileclaim *claims) {
+  llrb_char_ptr_fileclaim_new(claims);
+  mz_uint num_files = mz_zip_reader_get_num_files(zip);
+  for (mz_uint i = 0; i < num_files; i++) {
+    collect_one_claim(zip, i, op, package, claims);
+  }
+}
+
+// move every claim into the shared index as `package`'s IndexDataEntry,
+// consuming the tree: each path key is either handed to the index or freed.
+// on return `claims` is empty
+static void merge_claims_into_index(llrb_path_indexdata *index,
+                                    const char *package,
+                                    llrb_char_ptr_fileclaim *claims) {
+  llrb_char_ptr_fileclaim_iter iter;
+  llrb_char_ptr_fileclaim_iter_begin(claims, &iter);
+  char_ptr path;
+  FileClaim claim;
+  while (llrb_char_ptr_fileclaim_iter_next(&iter, &path, &claim)) {
+    IndexData *data = NULL;
+    if (!llrb_path_indexdata_get_ref(index, &path, &data)) {
+      IndexData fresh;
+      llrb_char_ptr_fileclaim_new(&fresh.claims);
+      // the index now owns `path`
+      llrb_path_indexdata_insert(index, &path, &fresh);
+      llrb_path_indexdata_get_ref(index, &path, &data);
+    } else {
+      // path already indexed; the index keeps its own key
+      free(path);
+    }
+
+    char *key = strdup(package);
+    bool inserted = llrb_char_ptr_fileclaim_insert(&data->claims, &key, &claim);
+    // duplicate package name should have been caught earlier
+    assert(inserted);
+  }
+  llrb_char_ptr_fileclaim_delete(claims);
 }
 
 // add a zip file to an existing index
@@ -102,53 +245,9 @@ static void add_zip_file_index(llrb_path_indexdata *index, const char *package,
     return;
   }
 
-  // Iterate through all files in the zip archive
-  mz_uint num_files = mz_zip_reader_get_num_files(&zip);
-  for (mz_uint j = 0; j < num_files; j++) {
-    mz_zip_archive_file_stat file_stat;
-    if (!mz_zip_reader_file_stat(&zip, j, &file_stat)) {
-      LOG_ERROR_ARGS(ERR_LEVEL_ERROR,
-                     "index %s: could not get file stat for file %u in zip: %s",
-                     package_path, j,
-                     mz_zip_get_error_string(mz_zip_get_last_error(&zip)));
-      continue;
-    }
-
-    mz_uint need = mz_zip_reader_get_filename(&zip, j, NULL, 0);
-    char *name = malloc(need);
-    defer free(name);
-    mz_zip_reader_get_filename(&zip, j, name, need);
-    char *normalized = normalize(name);
-    if (normalized == NULL) {
-      LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "index %s: invalid filename %s",
-                     package_path, name);
-      continue;
-    }
-
-    // omit trailing / for normalization purposes
-    size_t normalized_len = strlen(normalized);
-    if (normalized[normalized_len - 1] == '/') {
-      normalized[normalized_len - 1] = '\0';
-    }
-
-    IndexData *data = NULL;
-    if (!llrb_path_indexdata_get_ref(index, &normalized, &data)) {
-      IndexData fresh;
-      vec_IndexDataEntry_init(&fresh.claims);
-      // the llrb now owns `normalized`
-      llrb_path_indexdata_insert(index, &normalized, &fresh);
-      llrb_path_indexdata_get_ref(index, &normalized, &data);
-    } else {
-      // path already exists as key
-      free(normalized);
-    }
-    IndexDataEntry claim = {
-        .package = strdup(package),
-        .is_directory = file_stat.m_is_directory,
-        .crc32 = file_stat.m_crc32,
-    };
-    vec_IndexDataEntry_push(&data->claims, &claim);
-  }
+  llrb_char_ptr_fileclaim claims;
+  collect_file_claims(&zip, "index", package, &claims);
+  merge_claims_into_index(index, package, &claims);
 }
 
 // read the central directories of all the files and construct an index of all
@@ -180,29 +279,44 @@ void build_file_index(llrb_path_indexdata *index, char *pkgs_path) {
   }
 }
 
+static void delete_char_ptr_fileclaims(llrb_char_ptr_fileclaim *claims) {
+  llrb_char_ptr_fileclaim_iter claims_iter;
+  llrb_char_ptr_fileclaim_iter_begin(claims, &claims_iter);
+  char_ptr claims_key;
+  FileClaim claim;
+  while (llrb_char_ptr_fileclaim_iter_next(&claims_iter, &claims_key, &claim)) {
+    free(claims_key);
+  }
+  llrb_char_ptr_fileclaim_delete(claims);
+}
+
 void delete_file_index(llrb_path_indexdata *index) {
-  llrb_path_indexdata_iter iter;
-  llrb_path_indexdata_iter_begin(index, &iter);
-  char_ptr key;
-  IndexData data;
-  while (llrb_path_indexdata_iter_next(&iter, &key, &data)) {
-    for (size_t i = 0; i < vec_IndexDataEntry_len(&data.claims); i++) {
-      free(vec_IndexDataEntry_at(&data.claims, i)->package);
-    }
-    vec_IndexDataEntry_delete(&data.claims);
-    free(key);
+  llrb_path_indexdata_iter index_iter;
+  llrb_path_indexdata_iter_begin(index, &index_iter);
+  char_ptr index_key;
+  IndexData indexdata;
+  while (llrb_path_indexdata_iter_next(&index_iter, &index_key, &indexdata)) {
+    delete_char_ptr_fileclaims(&indexdata.claims);
+    free(index_key);
   }
   llrb_path_indexdata_delete(index);
 }
 
-static ErrVal ensure_directory_exists(char *package, char *path) {
-  // path+1: path is always absolute (starts with '/'), so the first
-  // component boundary belongs to the root and creating it would be
-  // mkdir_portable(""), which fails with ENOENT rather than EEXIST.
+// create sysroot and its ancestors. package-relative directories don't come
+// through here: the claims tree lists every one of them, parents strictly
+// before children, so install creates them in iteration order
+static ErrVal ensure_sysroot_exists(const char *package, const char *sysroot) {
+  // append a trailing '/' so the loop sees a boundary for sysroot itself
+  char *path = malloc(strlen(sysroot) + 2);
+  defer free(path);
+  sprintf(path, "%s/", sysroot);
+  // path+1: if sysroot is absolute the first boundary belongs to the root,
+  // and creating it would be mkdir_portable(""), which fails with ENOENT
+  // rather than EEXIST
   for (char *p = path + 1; *p != '\0'; p++) {
     if (*p == '/') {
       *p = '\0';
-      int result = mkdir_portable(path, 0755);
+      int result = mkdir_portable(path, 0o755);
       if (result == 0) {
         LOG_ERROR_ARGS(ERR_LEVEL_DEBUG, "install %s: created directory %s",
                        package, path);
@@ -216,103 +330,6 @@ static ErrVal ensure_directory_exists(char *package, char *path) {
     }
   }
   return ERR_OK;
-}
-
-void uninstall_remove_file(char *sysroot, char *package,
-                           mz_zip_archive_file_stat file_stat,
-                           mz_zip_archive *zip, bool dry_run) {
-
-  mz_uint need =
-      mz_zip_reader_get_filename(zip, file_stat.m_file_index, NULL, 0);
-  char *name = malloc(need);
-  defer free(name);
-  mz_zip_reader_get_filename(zip, file_stat.m_file_index, name, need);
-  char *normalized = normalize(name);
-  if (normalized == NULL) {
-    LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "uninstall %s: invalid filename %s",
-                   package, name);
-    return;
-  }
-  if (strcmp(normalized, name) != 0) {
-    LOG_ERROR_ARGS(ERR_LEVEL_INFO, "uninstall %s: normalized filename %s to %s",
-                   package, name, normalized);
-  }
-
-  char *target = malloc(strlen(sysroot) + 1 + strlen(normalized) + 1);
-  sprintf(target, "%s/%s", sysroot, normalized);
-
-  LOG_ERROR_ARGS(ERR_LEVEL_INFO, "uninstall %s: removing file %s (at %s)",
-                 package, normalized, target);
-
-  if (!dry_run) {
-    if (file_stat.m_is_directory) {
-      // fails harmlessly if the directory is shared with another package or
-      // still holds user files
-      rmdir_portable(target);
-    } else if (remove(target) != 0) {
-      LOG_ERROR_ARGS(ERR_LEVEL_ERROR,
-                     "uninstall %s: could not remove file %s (at %s): %s",
-                     package, normalized, target, strerror(errno));
-    }
-  }
-
-  free(normalized);
-  free(target);
-}
-
-void install_extract_file(char *sysroot, char *package,
-                          mz_zip_archive_file_stat file_stat,
-                          mz_zip_archive *zip, bool dry_run) {
-
-  if (!file_stat.m_is_supported) {
-    LOG_ERROR_ARGS(ERR_LEVEL_ERROR,
-                   "install %s: file %s is encrypted or uses an unsupported "
-                   "compression method",
-                   package, file_stat.m_filename);
-    return;
-  }
-
-  mz_uint need =
-      mz_zip_reader_get_filename(zip, file_stat.m_file_index, NULL, 0);
-  char *name = malloc(need);
-  defer free(name);
-  mz_zip_reader_get_filename(zip, file_stat.m_file_index, name, need);
-  char *normalized = normalize(name);
-  if (normalized == NULL) {
-    LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "install %s: invalid filename %s", package,
-                   name);
-    return;
-  }
-  if (strcmp(normalized, name) != 0) {
-    LOG_ERROR_ARGS(ERR_LEVEL_INFO, "install %s: normalized filename %s to %s",
-                   package, name, normalized);
-  }
-
-  char *target = malloc(strlen(sysroot) + 1 + strlen(normalized) + 1);
-  sprintf(target, "%s/%s", sysroot, normalized);
-
-  LOG_ERROR_ARGS(ERR_LEVEL_INFO, "install %s: extracting file %s to %s",
-                 package, normalized, target);
-
-  if (!dry_run) {
-    if (file_stat.m_is_directory) {
-      ensure_directory_exists(package, target);
-    } else {
-      // create parents even when the archive has no directory entries or
-      // lists them out of order
-      ensure_directory_exists(package, target);
-      if (!mz_zip_reader_extract_to_file(zip, file_stat.m_file_index, target,
-                                         0)) {
-        LOG_ERROR_ARGS(ERR_LEVEL_ERROR,
-                       "install %s: could not extract file %s to %s: %s",
-                       package, normalized, target,
-                       mz_zip_get_error_string(mz_zip_get_last_error(zip)));
-      }
-    }
-  }
-
-  free(normalized);
-  free(target);
 }
 
 ErrVal install_package(
@@ -345,31 +362,49 @@ ErrVal install_package(
     return ERR_UNKNOWN;
   }
 
-  // Test for conflicts
-  mz_uint num_files = mz_zip_reader_get_num_files(&zip);
-  for (mz_uint i = 0; i < num_files; i++) {
-    mz_zip_archive_file_stat file_stat;
-    if (!mz_zip_reader_file_stat(&zip, i, &file_stat)) {
-      LOG_ERROR_ARGS(
-          ERR_LEVEL_ERROR,
-          "install %s: could not get file stat for file %u in zip: %s", package,
-          i, mz_zip_get_error_string(mz_zip_get_last_error(&zip)));
-      continue;
+  llrb_char_ptr_fileclaim claims;
+  collect_file_claims(&zip, "install", package, &claims);
+  defer delete_file_claims(&claims);
+
+  // TODO: probe `index` with each claimed path to detect cross-package
+  // conflicts before touching the filesystem
+
+  if (!dry_run) {
+    ErrVal err = ensure_sysroot_exists(package, sysroot);
+    if (err != ERR_OK) {
+      return err;
     }
-    install_extract_file(sysroot, package, file_stat, &zip, dry_run);
   }
 
-  // Install
-  for (mz_uint i = 0; i < num_files; i++) {
-    mz_zip_archive_file_stat file_stat;
-    if (!mz_zip_reader_file_stat(&zip, i, &file_stat)) {
-      LOG_ERROR_ARGS(
-          ERR_LEVEL_ERROR,
-          "install %s: could not get file stat for file %u in zip: %s", package,
-          i, mz_zip_get_error_string(mz_zip_get_last_error(&zip)));
-      continue;
+  llrb_char_ptr_fileclaim_iter iter;
+  llrb_char_ptr_fileclaim_iter_begin(&claims, &iter);
+  char_ptr path;
+  FileClaim claim;
+  while (llrb_char_ptr_fileclaim_iter_next(&iter, &path, &claim)) {
+    char *target = malloc(strlen(sysroot) + 1 + strlen(path) + 1);
+    defer free(target);
+    sprintf(target, "%s/%s", sysroot, path);
+
+    if (claim.is_directory) {
+      LOG_ERROR_ARGS(ERR_LEVEL_INFO,
+                     "install %s: creating directory %s (at %s)", package, path,
+                     target);
+      if (!dry_run && mkdir_portable(target, 0o755) != 0 && errno != EEXIST) {
+        LOG_ERROR_ARGS(ERR_LEVEL_ERROR,
+                       "install %s: could not create directory %s (at %s): %s",
+                       package, path, target, strerror(errno));
+      }
+    } else {
+      LOG_ERROR_ARGS(ERR_LEVEL_INFO, "install %s: extracting file %s to %s",
+                     package, path, target);
+      if (!dry_run &&
+          !mz_zip_reader_extract_to_file(&zip, claim.file_index, target, 0)) {
+        LOG_ERROR_ARGS(ERR_LEVEL_ERROR,
+                       "install %s: could not extract file %s to %s: %s",
+                       package, path, target,
+                       mz_zip_get_error_string(mz_zip_get_last_error(&zip)));
+      }
     }
-    install_extract_file(sysroot, package, file_stat, &zip, dry_run);
   }
   return ERR_OK;
 }
@@ -404,21 +439,64 @@ ErrVal uninstall_package(
     return ERR_UNKNOWN;
   }
 
-  // Iterate through all files in the zip archive
-  // we do this in REVERSE order to ensure that we delete files before their
-  // parent directories
-  mz_uint num_files = mz_zip_reader_get_num_files(&zip);
-  for (mz_uint i = num_files; i > 0; i--) {
-    mz_uint index = i - 1;
-    mz_zip_archive_file_stat file_stat;
-    if (!mz_zip_reader_file_stat(&zip, index, &file_stat)) {
-      LOG_ERROR_ARGS(
-          ERR_LEVEL_ERROR,
-          "uninstall %s: could not get file stat for file %u in zip: %s",
-          package, index, mz_zip_get_error_string(mz_zip_get_last_error(&zip)));
+  llrb_char_ptr_fileclaim claims;
+  collect_file_claims(&zip, "uninstall", package, &claims);
+  defer delete_file_claims(&claims);
+
+  // remove in reverse sorted order so every child is deleted before the parent
+  // we also ignore where other packages have claims
+
+  vec_char_ptr paths; // borrows the claims tree's keys
+  vec_char_ptr_init(&paths);
+  defer vec_char_ptr_delete(&paths);
+  llrb_char_ptr_fileclaim_iter iter;
+  llrb_char_ptr_fileclaim_iter_begin(&claims, &iter);
+  char_ptr path;
+  FileClaim claim;
+  while (llrb_char_ptr_fileclaim_iter_next(&iter, &path, &claim)) {
+
+    IndexData *indexdata;
+    bool indexdata_found =
+        llrb_path_indexdata_get_ref(index, &path, &indexdata);
+    // something has gone wrong if we didn't find it.
+    // this is because the package we are uninstalling must have been installed.
+    // we didn't ask the indexing to skip itself, so it has gotta be in there.
+    assert(indexdata_found);
+
+    // similarly, we must ensure that this claim is actually in the filetree (in
+    // order to have the next thing make sense)
+    FileClaim thisclaim;
+    bool thisclaim_found =
+        llrb_char_ptr_fileclaim_get(&indexdata->claims, &package, &thisclaim);
+    assert(thisclaim_found);
+
+    // if there is > 1 claim omit from deletion
+    if (indexdata->claims.len > 1) {
       continue;
     }
-    uninstall_remove_file(sysroot, package, file_stat, &zip, dry_run);
+
+    vec_char_ptr_push(&paths, &path);
+  }
+
+  for (size_t i_r = vec_char_ptr_len(&paths); i_r > 0; i_r--) {
+    path = *vec_char_ptr_at(&paths, i_r - 1);
+    llrb_char_ptr_fileclaim_get(&claims, &path, &claim);
+
+    char *target = malloc(strlen(sysroot) + 1 + strlen(path) + 1);
+    defer free(target);
+    sprintf(target, "%s/%s", sysroot, path);
+
+    LOG_ERROR_ARGS(ERR_LEVEL_INFO, "uninstall %s: removing %s (at %s)", package,
+                   path, target);
+    if (!dry_run) {
+      if (claim.is_directory) {
+        rmdir_portable(target);
+      } else if (remove(target) != 0) {
+        LOG_ERROR_ARGS(ERR_LEVEL_ERROR,
+                       "uninstall %s: could not remove file %s (at %s): %s",
+                       package, path, target, strerror(errno));
+      }
+    }
   }
   return ERR_OK;
 }
@@ -427,7 +505,6 @@ ErrVal resolve_package_paths(vec_char_ptr *package_paths,
                              const vec_char_ptr *repositories,
                              const vec_char_ptr *packages) {
   size_t n_targets = vec_char_ptr_len(packages);
-  vec_char_ptr_init(package_paths);
 
   // fetch a list of the packages in the repositories
   size_t n_repositories = vec_char_ptr_len(repositories);
@@ -460,40 +537,39 @@ ErrVal resolve_package_paths(vec_char_ptr *package_paths,
 
     char *best_package_entry = NULL;
     char *best_repository = NULL;
-    apk_blob_t best_package_entry_version;
+    apk_blob_t best_package_entry_version = {};
 
     for (size_t r = 0; r < n_repositories; r++) {
       char *repository = *vec_char_ptr_at(repositories, r);
       size_t n_entries = vec_char_ptr_len(&entries[r]);
       for (size_t e = 0; e < n_entries; e++) {
-        char *entry = *vec_char_ptr_at(&entries[i], e);
-        if (strncmp(package, entry, package_strlen) != 0) {
-          continue;
-        }
+        char *entry = *vec_char_ptr_at(&entries[r], e);
+        size_t entry_strlen = strlen(entry);
         if (!endswith(entry, ".zip")) {
           continue;
         }
-
-        // pointer to the first char in the .zip suffix
+        if (!(package_strlen + 1 < entry_strlen &&
+              entry[package_strlen] == '-' &&
+              strncmp(entry, package, package_strlen) == 0)) {
+          continue;
+        }
+        // // pointer to the first char in the .zip suffix
         char *end = entry + (strlen(entry) - strlen(".zip"));
+        // the char after the hyphen
+        char *vstart = entry + package_strlen + 1;
+        apk_blob_t candidate_version = APK_BLOB_PTR_LEN(vstart, end - vstart);
 
-        for (char *p = end - 1; p > entry; p--) {
-          if (*p == '-') {
-            // the char after the hyphen
-            char *vstart = p + 1;
-            if (apk_version_validate(APK_BLOB_PTR_LEN(vstart, end - vstart))) {
-              apk_blob_t candidate_version =
-                  APK_BLOB_PTR_LEN(vstart, end - vstart);
-              if (best_package_entry == NULL ||
-                  apk_blob_compare(candidate_version,
-                                   best_package_entry_version) ==
-                      APK_VERSION_GREATER) {
-                best_package_entry = entry;
-                best_repository = repository;
-                best_package_entry_version = candidate_version;
-              }
-            }
-          }
+        if (!apk_version_validate(candidate_version)) {
+          continue;
+        }
+
+        if (best_package_entry == NULL ||
+            apk_version_compare(candidate_version,
+                                best_package_entry_version) ==
+                APK_VERSION_GREATER) {
+          best_package_entry = entry;
+          best_repository = repository;
+          best_package_entry_version = candidate_version;
         }
       }
     }
@@ -511,6 +587,6 @@ ErrVal resolve_package_paths(vec_char_ptr *package_paths,
     sprintf(package_path, "%s/%s", best_repository, best_package_entry);
     vec_char_ptr_push(package_paths, &package_path);
   }
-  
+
   return ERR_OK;
 }

@@ -1,15 +1,14 @@
 #ifndef llrb_path_indexdata_h_INCLUDED
 #define llrb_path_indexdata_h_INCLUDED
 
-#include "instances/vec_indexdataentry.h"
-
-typedef char *char_ptr;
+#include "instances/llrb_char_ptr_fileclaim.h"
 
 // per-path index data. claims holds every package's claim on this path (one
 // is the common case, more means packages share or conflict); path-specific
 // fields that aren't per-claimant belong here alongside it
 typedef struct {
-  vec_IndexDataEntry claims;
+  // Map<PackageName, FileClaim>
+  llrb_char_ptr_fileclaim claims;
 } IndexData;
 
 #define LLRB_NAME path_indexdata

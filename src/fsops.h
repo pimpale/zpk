@@ -9,8 +9,7 @@
 void build_file_index(llrb_path_indexdata *index, char *pkgs_path);
 void delete_file_index(llrb_path_indexdata *index);
 
-// function initializes `package_paths`. Caller is responsible for freeing the
-// vec
+// function appends to `package_paths`.
 ErrVal resolve_package_paths(vec_char_ptr *package_paths,
                              const vec_char_ptr *repositories,
                              const vec_char_ptr *packages);

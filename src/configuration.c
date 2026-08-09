@@ -1,6 +1,5 @@
 #include "configuration.h"
 
-#include "constants.h"
 #include "error.h"
 #include "oscompatlayer.h"
 #include "pathutils.h"
