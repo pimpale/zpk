@@ -2,8 +2,8 @@
 
 #include "constants.h"
 #include "error.h"
-#include "pathutils.h"
 #include "oscompatlayer.h"
+#include "pathutils.h"
 
 #include <errno.h>
 #include <stdlib.h>
@@ -14,18 +14,6 @@
 static const char *SYSTEM_CONFIG_PATH = "/etc/zpk.ini";
 static const char *USER_CONFIG_PATH = "~/.zpk.ini";
 static const char *CONFIGURATION_FILE_NAME = ".zpk.ini";
-
-static void truncate_stringvec(vec_char_ptr *vec) {
-  for (uint32_t i = 0; i < vec_char_ptr_len(vec); i++) {
-    free(*vec_char_ptr_at(vec, i));
-  }
-  vec_char_ptr_clear(vec);
-}
-
-static void delete_stringvec(vec_char_ptr *vec) {
-  truncate_stringvec(vec);
-  vec_char_ptr_delete(vec);
-}
 
 // Resolves `raw` against the directory containing `config_path`, unless
 // `raw` is a URI (contains "://"), already absolute, or home-relative (~).
@@ -111,7 +99,7 @@ static void maybe_apply_config_file(ZpkConfiguration *config, const char *path,
     }
     // repositories (and not extra repositories) means that we replace any
     // existing repositories with the ones in the config file:
-    truncate_stringvec(&config->repositories);
+    vec_char_ptr_clear_and_freeowned(&config->repositories);
     for (size_t i = 0; i < val->value.array->len; i++) {
       TomlValue *elem = val->value.array->elements[i];
       if (elem->type != TOML_STRING) {
@@ -136,8 +124,8 @@ static void maybe_apply_config_file(ZpkConfiguration *config, const char *path,
     for (size_t i = 0; i < val->value.array->len; i++) {
       TomlValue *elem = val->value.array->elements[i];
       if (elem->type != TOML_STRING) {
-        LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "%s: extra-repositories must be strings",
-                       path);
+        LOG_ERROR_ARGS(ERR_LEVEL_FATAL,
+                       "%s: extra-repositories must be strings", path);
         PANIC();
       }
       char_ptr repo = resolve_config_relative(path, elem->value.string->str);
@@ -178,7 +166,7 @@ static void apply_env_config(ZpkConfiguration *config) {
   // comma-separated list; replaces any file-configured repositories
   env = getenv("ZPK_REPOSITORIES");
   if (env != NULL) {
-    truncate_stringvec(&config->repositories);
+    vec_char_ptr_clear_and_freeowned(&config->repositories);
     push_env_repositories(&config->repositories, env);
   }
 
@@ -297,7 +285,7 @@ static void resolve_configuration(ZpkConfiguration *config,
 void delete_ZpkConfiguration(ZpkConfiguration *config) {
   free(config->sysroot);
   free(config->pkgs_path);
-  delete_stringvec(&config->repositories);
+  vec_char_ptr_delete_and_freeowned(&config->repositories);
 }
 
 static const char *USAGE =
@@ -429,7 +417,7 @@ void parse_args(int argc, char **argv, ZpkConfiguration *config,
       verbosity += nverbose > 0 ? nverbose : 1;
       // applied immediately, so that everything after this point -- including
       // the config file search -- logs at the requested level
-      zpk_log_level = verbosity_to_level(verbosity);
+      g_log_level = verbosity_to_level(verbosity);
     } else if (have_op && kind == ZPK_OP_FETCH &&
                (strcmp(arg, "-o") == 0 || strcmp(arg, "--output") == 0)) {
       fetch_output = opt_value(argc, argv, &i);
@@ -487,10 +475,11 @@ void parse_args(int argc, char **argv, ZpkConfiguration *config,
     break;
   }
 
-  // args are fully validated; only now touch the filesystem. resolve_configuration
-  // copies the -X strings, so we still own these
-  resolve_configuration(config, cli_config, cli_sysroot, &cli_extra_repositories);
-  delete_stringvec(&cli_extra_repositories);
+  // args are fully validated; only now touch the filesystem.
+  // resolve_configuration copies the -X strings, so we still own these
+  resolve_configuration(config, cli_config, cli_sysroot,
+                        &cli_extra_repositories);
+  vec_char_ptr_delete_and_freeowned(&cli_extra_repositories);
 
   op->op = kind;
   op->dry_run = dry_run;
@@ -531,19 +520,19 @@ void parse_args(int argc, char **argv, ZpkConfiguration *config,
 void delete_ZpkOperation(ZpkOperation *op) {
   switch (op->op) {
   case ZPK_OP_ADD:
-    delete_stringvec(&op->add.targets);
+    vec_char_ptr_delete_and_freeowned(&op->add.targets);
     break;
   case ZPK_OP_DEL:
-    delete_stringvec(&op->del.targets);
+    vec_char_ptr_delete_and_freeowned(&op->del.targets);
     break;
   case ZPK_OP_UPGRADE:
-    delete_stringvec(&op->upgrade.targets);
+    vec_char_ptr_delete_and_freeowned(&op->upgrade.targets);
     break;
   case ZPK_OP_FIX:
-    delete_stringvec(&op->fix.targets);
+    vec_char_ptr_delete_and_freeowned(&op->fix.targets);
     break;
   case ZPK_OP_FETCH:
-    delete_stringvec(&op->fetch.targets);
+    vec_char_ptr_delete_and_freeowned(&op->fetch.targets);
     free(op->fetch.output_dir);
     break;
   case ZPK_OP_OWNER:

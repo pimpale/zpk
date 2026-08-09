@@ -6,10 +6,12 @@
 //   #define LLRB_VALUE process_ptr
 //   #include <llrb/llrb.h>
 //
-// This declares llrb_pid_process and its operations. Keys and values are
-// copied into independently allocated nodes. The implementation
-// instantiation additionally defines LLRB_COMPARE and may override the
-// tree/node allocation hooks; see llrb_impl.h.
+// This declares llrb_pid_process and its operations. The tree struct is
+// caller-owned; _new initializes it in place and _delete frees the nodes
+// but not the struct. Keys and values are copied into independently
+// allocated nodes. The implementation instantiation additionally defines
+// LLRB_COMPARE and may override the node allocation hooks; see
+// llrb_impl.h.
 //
 // LLRB_NAME must be a single identifier usable in token pasting. LLRB_KEY
 // and LLRB_VALUE must be complete types. This file intentionally has no
@@ -50,16 +52,24 @@ struct LLRB_NODE_T {
   bool red;
 };
 
+// Publicly complete only so callers can own the storage; treat the fields
+// as private.
+struct LLRB_T {
+  LLRB_NODE_T *root;
+  size_t len;
+};
+
 // Iterators are allocation-free. Mutating the tree invalidates all active
 // iterators; otherwise each call advances in ascending key order.
 typedef struct LLRB_ITER_T {
   const LLRB_NODE_T *node;
 } LLRB_ITER_T;
 
-// False means allocation failure. _insert also returns false for a duplicate
-// key and leaves the existing value unchanged.
-bool LLRB_FN(_new)(LLRB_T **tree);
-void LLRB_FN(_delete)(LLRB_T **tree);
+// _new initializes a caller-owned struct to an empty tree; _delete frees
+// all nodes and leaves the struct empty (identical to _clear, provided for
+// symmetry with _new).
+void LLRB_FN(_new)(LLRB_T *tree);
+void LLRB_FN(_delete)(LLRB_T *tree);
 void LLRB_FN(_clear)(LLRB_T *tree);
 
 bool LLRB_FN(_insert)(LLRB_T *tree, const LLRB_KEY *key,

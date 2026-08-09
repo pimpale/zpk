@@ -1,9 +1,11 @@
 #include <assert.h>
 #include <errno.h>
+#include <stddefer.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "apkver/apkver.h"
 #include "constants.h"
 #include "error.h"
 #include "fsops.h"
@@ -78,129 +80,109 @@ static bool endswith(const char *str, const char *suffix) {
   return strcmp(str + (len - suflen), suffix) == 0;
 }
 
+// add a zip file to an existing index
+static void add_zip_file_index(llrb_path_indexdata *index, const char *package,
+                               char *package_path) {
+  FILE *f = fopen(package_path, "rb");
+  if (f == NULL) {
+    LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "index %s: could not open file: %s",
+                   package_path, strerror(errno));
+    return;
+  }
+  defer fclose(f);
+
+  mz_zip_archive zip;
+  mz_zip_zero_struct(&zip);
+  defer mz_zip_reader_end(&zip);
+  if (!mz_zip_reader_init_cfile(&zip, f, 0, 0)) {
+    LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "index %s: could not open zip archive: %s",
+                   package_path,
+                   mz_zip_get_error_string(mz_zip_get_last_error(&zip)));
+    // a damaged package shouldn't hide every other package's claims
+    return;
+  }
+
+  // Iterate through all files in the zip archive
+  mz_uint num_files = mz_zip_reader_get_num_files(&zip);
+  for (mz_uint j = 0; j < num_files; j++) {
+    mz_zip_archive_file_stat file_stat;
+    if (!mz_zip_reader_file_stat(&zip, j, &file_stat)) {
+      LOG_ERROR_ARGS(ERR_LEVEL_ERROR,
+                     "index %s: could not get file stat for file %u in zip: %s",
+                     package_path, j,
+                     mz_zip_get_error_string(mz_zip_get_last_error(&zip)));
+      continue;
+    }
+
+    mz_uint need = mz_zip_reader_get_filename(&zip, j, NULL, 0);
+    char *name = malloc(need);
+    defer free(name);
+    mz_zip_reader_get_filename(&zip, j, name, need);
+    char *normalized = normalize(name);
+    if (normalized == NULL) {
+      LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "index %s: invalid filename %s",
+                     package_path, name);
+      continue;
+    }
+
+    // omit trailing / for normalization purposes
+    size_t normalized_len = strlen(normalized);
+    if (normalized[normalized_len - 1] == '/') {
+      normalized[normalized_len - 1] = '\0';
+    }
+
+    IndexData *data = NULL;
+    if (!llrb_path_indexdata_get_ref(index, &normalized, &data)) {
+      IndexData fresh;
+      vec_IndexDataEntry_init(&fresh.claims);
+      // the llrb now owns `normalized`
+      llrb_path_indexdata_insert(index, &normalized, &fresh);
+      llrb_path_indexdata_get_ref(index, &normalized, &data);
+    } else {
+      // path already exists as key
+      free(normalized);
+    }
+    IndexDataEntry claim = {
+        .package = strdup(package),
+        .is_directory = file_stat.m_is_directory,
+        .crc32 = file_stat.m_crc32,
+    };
+    vec_IndexDataEntry_push(&data->claims, &claim);
+  }
+}
+
 // read the central directories of all the files and construct an index of all
 // the files in it
 // only_installed (mandatory for now) only builds the index with installed files
 // (useful for ownership tests)
-static llrb_path_indexdata *build_file_index(char *pkgs_path,
-                                             bool only_installed) {
-
-  // for now only installed works
-  assert(only_installed);
+void build_file_index(llrb_path_indexdata *index, char *pkgs_path) {
+  llrb_path_indexdata_new(index);
   // first list files in the pkgs path:
   vec_char_ptr entries;
   vec_char_ptr_init(&entries);
+  defer vec_char_ptr_delete_and_freeowned(&entries);
+
   if (listdir_portable(pkgs_path, &entries) != 0) {
     LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "index: unable to list files in %s: %s",
                    pkgs_path, strerror(errno));
-    vec_char_ptr_delete(&entries);
-    return NULL;
+    return;
   }
-
-  llrb_path_indexdata *index = NULL;
-  llrb_path_indexdata_new(&index);
 
   for (size_t i = 0; i < vec_char_ptr_len(&entries); i++) {
     char *entry = *vec_char_ptr_at(&entries, i);
-    // if entry doesn't end with ".zip", skip
     if (!endswith(entry, ".zip")) {
       continue;
     }
-    if (only_installed && !endswith(entry, "_INSTALLED.zip")) {
-      continue;
-    }
-
     char *package_path = malloc(strlen(pkgs_path) + 1 + strlen(entry) + 1);
     sprintf(package_path, "%s/%s", pkgs_path, entry);
-    FILE *f = fopen(package_path, "rb");
-    if (f == NULL) {
-      LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "index %s: could not open file: %s",
-                     package_path, strerror(errno));
-      free(package_path);
-      continue;
-    }
-
-    mz_zip_archive zip;
-    mz_zip_zero_struct(&zip);
-    if (!mz_zip_reader_init_cfile(&zip, f, 0, 0)) {
-      LOG_ERROR_ARGS(ERR_LEVEL_ERROR,
-                     "index %s: could not open zip archive: %s", package_path,
-                     mz_zip_get_error_string(mz_zip_get_last_error(&zip)));
-      // a damaged package shouldn't hide every other package's claims
-      mz_zip_reader_end(&zip);
-      fclose(f);
-      free(package_path);
-      continue;
-    }
-
-    // Iterate through all files in the zip archive
-    mz_uint num_files = mz_zip_reader_get_num_files(&zip);
-    for (mz_uint j = 0; j < num_files; j++) {
-      mz_zip_archive_file_stat file_stat;
-      if (!mz_zip_reader_file_stat(&zip, j, &file_stat)) {
-        LOG_ERROR_ARGS(
-            ERR_LEVEL_ERROR,
-            "index %s: could not get file stat for file %u in zip: %s",
-            package_path, j,
-            mz_zip_get_error_string(mz_zip_get_last_error(&zip)));
-        continue;
-      }
-
-      mz_uint need = mz_zip_reader_get_filename(&zip, j, NULL, 0);
-      char *name = malloc(need);
-      mz_zip_reader_get_filename(&zip, j, name, need);
-      char *normalized = normalize(name);
-      if (normalized == NULL) {
-        LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "index %s: invalid filename %s",
-                       package_path, name);
-        free(name);
-        continue;
-      }
-      free(name);
-
-      // omit trailing / for normalization purposes
-      size_t normalized_len = strlen(normalized);
-      if (normalized[normalized_len - 1] == '/') {
-        normalized[normalized_len - 1] = '\0';
-      }
-
-      IndexData *data = NULL;
-      if (!llrb_path_indexdata_get_ref(index, &normalized, &data)) {
-        IndexData fresh;
-        vec_IndexDataEntry_init(&fresh.claims);
-        // the key string is now owned by the index (freed in
-        // delete_file_index)
-        llrb_path_indexdata_insert(index, &normalized, &fresh);
-        llrb_path_indexdata_get_ref(index, &normalized, &data);
-      } else {
-        // path already keyed; the index keeps its own string
-        free(normalized);
-      }
-      IndexDataEntry claim = {
-          .package = strdup(entry),
-          .is_directory = file_stat.m_is_directory,
-          .crc32 = file_stat.m_crc32,
-      };
-      vec_IndexDataEntry_push(&data->claims, &claim);
-    }
-
-    mz_zip_reader_end(&zip);
-    fclose(f);
+    add_zip_file_index(index, entry, package_path);
     free(package_path);
   }
-
-  for (size_t i = 0; i < vec_char_ptr_len(&entries); i++) {
-    free(*vec_char_ptr_at(&entries, i));
-  }
-  vec_char_ptr_delete(&entries);
-  return index;
 }
 
-// frees the index and everything it owns: key strings, per-claim package
-// strings, and the claim vectors
-static void delete_file_index(llrb_path_indexdata **index) {
+void delete_file_index(llrb_path_indexdata *index) {
   llrb_path_indexdata_iter iter;
-  llrb_path_indexdata_iter_begin(*index, &iter);
+  llrb_path_indexdata_iter_begin(index, &iter);
   char_ptr key;
   IndexData data;
   while (llrb_path_indexdata_iter_next(&iter, &key, &data)) {
@@ -243,19 +225,18 @@ void uninstall_remove_file(char *sysroot, char *package,
   mz_uint need =
       mz_zip_reader_get_filename(zip, file_stat.m_file_index, NULL, 0);
   char *name = malloc(need);
+  defer free(name);
   mz_zip_reader_get_filename(zip, file_stat.m_file_index, name, need);
   char *normalized = normalize(name);
   if (normalized == NULL) {
     LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "uninstall %s: invalid filename %s",
                    package, name);
-    free(name);
     return;
   }
   if (strcmp(normalized, name) != 0) {
     LOG_ERROR_ARGS(ERR_LEVEL_INFO, "uninstall %s: normalized filename %s to %s",
                    package, name, normalized);
   }
-  free(name);
 
   char *target = malloc(strlen(sysroot) + 1 + strlen(normalized) + 1);
   sprintf(target, "%s/%s", sysroot, normalized);
@@ -294,19 +275,18 @@ void install_extract_file(char *sysroot, char *package,
   mz_uint need =
       mz_zip_reader_get_filename(zip, file_stat.m_file_index, NULL, 0);
   char *name = malloc(need);
+  defer free(name);
   mz_zip_reader_get_filename(zip, file_stat.m_file_index, name, need);
   char *normalized = normalize(name);
   if (normalized == NULL) {
     LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "install %s: invalid filename %s", package,
                    name);
-    free(name);
     return;
   }
   if (strcmp(normalized, name) != 0) {
     LOG_ERROR_ARGS(ERR_LEVEL_INFO, "install %s: normalized filename %s to %s",
                    package, name, normalized);
   }
-  free(name);
 
   char *target = malloc(strlen(sysroot) + 1 + strlen(normalized) + 1);
   sprintf(target, "%s/%s", sysroot, normalized);
@@ -335,35 +315,37 @@ void install_extract_file(char *sysroot, char *package,
   free(target);
 }
 
-ErrVal install_package(ZpkConfiguration *pConf, char *package, bool dry_run) {
-  char *package_path =
-      malloc(strlen(pConf->pkgs_path) + 1 + strlen(package) + 1);
-  sprintf(package_path, "%s/%s", pConf->pkgs_path, package);
-  LOG_ERROR_ARGS(ERR_LEVEL_INFO, "install %s: located at %s", package,
-                 package_path);
+ErrVal install_package(
+    // file index (for file conflict identification)
+    llrb_path_indexdata *index,
+    // user given package name (For logging)
+    char *package,
+    // zip file to install
+    char *package_path,
+    // where to install
+    char *sysroot,
+    // don't actually change FS
+    bool dry_run) {
   FILE *f = fopen(package_path, "rb");
   if (f == NULL) {
     LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "install %s: could not open file %s: %s",
                    package, package_path, strerror(errno));
-    free(package_path);
     return ERR_NOSUCHFILE;
   }
+  defer fclose(f);
 
   mz_zip_archive zip;
   mz_zip_zero_struct(&zip);
+  defer mz_zip_reader_end(&zip);
   if (!mz_zip_reader_init_cfile(&zip, f, 0, 0)) {
     LOG_ERROR_ARGS(ERR_LEVEL_ERROR,
                    "install %s: could not open zip archive %s: %s", package,
                    package_path,
                    mz_zip_get_error_string(mz_zip_get_last_error(&zip)));
-
-    free(package_path);
-    mz_zip_reader_end(&zip);
-    fclose(f);
     return ERR_UNKNOWN;
   }
 
-  // Iterate through all files in the zip archive
+  // Test for conflicts
   mz_uint num_files = mz_zip_reader_get_num_files(&zip);
   for (mz_uint i = 0; i < num_files; i++) {
     mz_zip_archive_file_stat file_stat;
@@ -374,40 +356,51 @@ ErrVal install_package(ZpkConfiguration *pConf, char *package, bool dry_run) {
           i, mz_zip_get_error_string(mz_zip_get_last_error(&zip)));
       continue;
     }
-    install_extract_file(pConf->sysroot, package, file_stat, &zip, dry_run);
+    install_extract_file(sysroot, package, file_stat, &zip, dry_run);
   }
 
-  mz_zip_reader_end(&zip);
-  fclose(f);
-  free(package_path);
+  // Install
+  for (mz_uint i = 0; i < num_files; i++) {
+    mz_zip_archive_file_stat file_stat;
+    if (!mz_zip_reader_file_stat(&zip, i, &file_stat)) {
+      LOG_ERROR_ARGS(
+          ERR_LEVEL_ERROR,
+          "install %s: could not get file stat for file %u in zip: %s", package,
+          i, mz_zip_get_error_string(mz_zip_get_last_error(&zip)));
+      continue;
+    }
+    install_extract_file(sysroot, package, file_stat, &zip, dry_run);
+  }
   return ERR_OK;
 }
 
-ErrVal uninstall_package(ZpkConfiguration *pConf, char *package, bool dry_run) {
-  char *package_path =
-      malloc(strlen(pConf->pkgs_path) + 1 + strlen(package) + 1);
-  sprintf(package_path, "%s/%s", pConf->pkgs_path, package);
-  LOG_ERROR_ARGS(ERR_LEVEL_INFO, "uninstall %s: located at %s", package,
-                 package_path);
+ErrVal uninstall_package(
+    // file index (for file conflict identification)
+    llrb_path_indexdata *index,
+    // user given package name (For logging)
+    char *package,
+    // zip file to install
+    char *package_path,
+    // where to install
+    char *sysroot,
+    // don't actually change FS
+    bool dry_run) {
   FILE *f = fopen(package_path, "rb");
   if (f == NULL) {
     LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "uninstall %s: could not open file %s: %s",
                    package, package_path, strerror(errno));
-    free(package_path);
     return ERR_NOSUCHFILE;
   }
+  defer fclose(f);
 
   mz_zip_archive zip;
   mz_zip_zero_struct(&zip);
+  defer mz_zip_reader_end(&zip);
   if (!mz_zip_reader_init_cfile(&zip, f, 0, 0)) {
     LOG_ERROR_ARGS(ERR_LEVEL_ERROR,
                    "uninstall %s: could not open zip archive %s: %s", package,
                    package_path,
                    mz_zip_get_error_string(mz_zip_get_last_error(&zip)));
-
-    free(package_path);
-    mz_zip_reader_end(&zip);
-    fclose(f);
     return ERR_UNKNOWN;
   }
 
@@ -425,11 +418,99 @@ ErrVal uninstall_package(ZpkConfiguration *pConf, char *package, bool dry_run) {
           package, index, mz_zip_get_error_string(mz_zip_get_last_error(&zip)));
       continue;
     }
-    uninstall_remove_file(pConf->sysroot, package, file_stat, &zip, dry_run);
+    uninstall_remove_file(sysroot, package, file_stat, &zip, dry_run);
+  }
+  return ERR_OK;
+}
+
+ErrVal resolve_package_paths(vec_char_ptr *package_paths,
+                             const vec_char_ptr *repositories,
+                             const vec_char_ptr *packages) {
+  size_t n_targets = vec_char_ptr_len(packages);
+  vec_char_ptr_init(package_paths);
+
+  // fetch a list of the packages in the repositories
+  size_t n_repositories = vec_char_ptr_len(repositories);
+
+  vec_char_ptr *entries =
+      (vec_char_ptr *)malloc(sizeof(vec_char_ptr) * n_repositories);
+  for (size_t i = 0; i < n_repositories; i++) {
+    vec_char_ptr_init(&entries[i]);
+  }
+  defer {
+    for (size_t i = 0; i < n_repositories; i++) {
+      vec_char_ptr_delete_and_freeowned(&entries[i]);
+    }
+    free(entries);
   }
 
-  mz_zip_reader_end(&zip);
-  fclose(f);
-  free(package_path);
+  for (size_t i = 0; i < n_repositories; i++) {
+    char *repository = *vec_char_ptr_at(repositories, i);
+    LOG_ERROR_ARGS(ERR_LEVEL_INFO, "resolve: listing files in %s", repository);
+    if (listdir_portable(repository, &entries[i]) != 0) {
+      LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "resolve: unable to list files in %s: %s",
+                     repository, strerror(errno));
+      return ERR_NOSUCHFILE;
+    }
+  }
+
+  for (size_t i = 0; i < n_targets; i++) {
+    char *package = *vec_char_ptr_at(packages, i);
+    size_t package_strlen = strlen(package);
+
+    char *best_package_entry = NULL;
+    char *best_repository = NULL;
+    apk_blob_t best_package_entry_version;
+
+    for (size_t r = 0; r < n_repositories; r++) {
+      char *repository = *vec_char_ptr_at(repositories, r);
+      size_t n_entries = vec_char_ptr_len(&entries[r]);
+      for (size_t e = 0; e < n_entries; e++) {
+        char *entry = *vec_char_ptr_at(&entries[i], e);
+        if (strncmp(package, entry, package_strlen) != 0) {
+          continue;
+        }
+        if (!endswith(entry, ".zip")) {
+          continue;
+        }
+
+        // pointer to the first char in the .zip suffix
+        char *end = entry + (strlen(entry) - strlen(".zip"));
+
+        for (char *p = end - 1; p > entry; p--) {
+          if (*p == '-') {
+            // the char after the hyphen
+            char *vstart = p + 1;
+            if (apk_version_validate(APK_BLOB_PTR_LEN(vstart, end - vstart))) {
+              apk_blob_t candidate_version =
+                  APK_BLOB_PTR_LEN(vstart, end - vstart);
+              if (best_package_entry == NULL ||
+                  apk_blob_compare(candidate_version,
+                                   best_package_entry_version) ==
+                      APK_VERSION_GREATER) {
+                best_package_entry = entry;
+                best_repository = repository;
+                best_package_entry_version = candidate_version;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    if (best_package_entry == NULL) {
+      LOG_ERROR_ARGS(
+          ERR_LEVEL_ERROR,
+          "resolve: did not find validly named package %s in any repository",
+          package);
+      return ERR_NOSUCHFILE;
+    }
+
+    char *package_path =
+        malloc(strlen(best_repository) + 1 + strlen(best_package_entry) + 1);
+    sprintf(package_path, "%s/%s", best_repository, best_package_entry);
+    vec_char_ptr_push(package_paths, &package_path);
+  }
+  
   return ERR_OK;
 }

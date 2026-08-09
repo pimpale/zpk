@@ -1,92 +1,137 @@
+#include <stddefer.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "configuration.h"
 #include "fsops.h"
 
-static void do_fetch(ZpkConfiguration *pConf, vec_char_ptr *pTargets,
-                     char *path) {
+static int do_fetch(ZpkConfiguration *pConf, vec_char_ptr *pTargets,
+                    char *path) {
   LOG_ERROR_ARGS(ERR_LEVEL_INFO, "fetching %zu targets to %s",
                  vec_char_ptr_len(pTargets), path);
   (void)pConf;
   (void)pTargets;
   (void)path;
+  return 0;
 }
 
-static void do_add(ZpkConfiguration *pConf, vec_char_ptr *pTargets,
-                   bool dry_run) {
-  do_fetch(pConf, pTargets, pConf->pkgs_path);
-  LOG_ERROR_ARGS(ERR_LEVEL_INFO, "installing %zu targets to %s",
-                 vec_char_ptr_len(pTargets), pConf->sysroot);
-  for (size_t i = 0; i < vec_char_ptr_len(pTargets); i++) {
-    install_package(pConf, *vec_char_ptr_at(pTargets, i), dry_run);
+static int do_add(ZpkConfiguration *pConf, vec_char_ptr *packages,
+                  bool dry_run) {
+  size_t n_targets = vec_char_ptr_len(packages);
+  LOG_ERROR_ARGS(ERR_LEVEL_INFO, "installing %zu targets to %s", n_targets,
+                 pConf->sysroot);
+
+  // resolve packages to install
+  vec_char_ptr package_paths;
+  resolve_package_paths(&package_paths, &pConf->repositories, packages);
+  defer vec_char_ptr_delete_and_freeowned(&package_paths);
+
+  for (size_t i = 0; i < n_targets; i++) {
+    char *package = *vec_char_ptr_at(packages, i);
+    char *package_path =
+        malloc(strlen(pConf->pkgs_path) + 1 + strlen(package) + 1);
+    sprintf(package_path, "%s/%s", pConf->pkgs_path, package);
+    vec_char_ptr_push(&package_paths, &package_path);
   }
-}
 
-static void do_del(ZpkConfiguration *pConf, vec_char_ptr *pTargets,
-                   bool dry_run) {
-  for (size_t i = 0; i < vec_char_ptr_len(pTargets); i++) {
-    uninstall_package(pConf, *vec_char_ptr_at(pTargets, i), dry_run);
+  // build index
+  llrb_path_indexdata index;
+  build_file_index(&index, pConf->pkgs_path);
+  defer delete_file_index(&index);
+
+  for (size_t i = 0; i < n_targets; i++) {
+    install_package(&index, *vec_char_ptr_at(packages, i),
+                    *vec_char_ptr_at(&package_paths, i), pConf->sysroot,
+                    dry_run);
   }
+  return 0;
 }
 
-static void do_upgrade(ZpkConfiguration *pConf, vec_char_ptr *pTargets) {
+static int do_del(ZpkConfiguration *pConf, vec_char_ptr *packages,
+                  bool dry_run) {
+  size_t n_targets = vec_char_ptr_len(packages);
+  LOG_ERROR_ARGS(ERR_LEVEL_INFO, "removing %zu targets from %s", n_targets,
+                 pConf->sysroot);
+
+  // resolve packages to remove
+  vec_char_ptr package_paths;
+
+  // we only look at packages that are actually installed
+  vec_char_ptr installedrepo;
+  vec_char_ptr_init_cap(&installedrepo, 1);
+  vec_char_ptr_push(&installedrepo, &pConf->pkgs_path);
+  // no ownership over pkgs path so no freeowned
+  defer vec_char_ptr_delete(&installedrepo);
+
+  resolve_package_paths(&package_paths, &installedrepo, packages);
+  defer vec_char_ptr_delete_and_freeowned(&package_paths);
+
+  // build index
+  llrb_path_indexdata index;
+  build_file_index(&index, pConf->pkgs_path);
+  defer delete_file_index(&index);
+
+  for (size_t i = 0; i < n_targets; i++) {
+    uninstall_package(&index, *vec_char_ptr_at(packages, i),
+                      *vec_char_ptr_at(&package_paths, i), pConf->sysroot,
+                      dry_run);
+  }
+  return 0;
+}
+
+static int do_upgrade(ZpkConfiguration *pConf, vec_char_ptr *pTargets) {
   (void)pConf;
   (void)pTargets;
+  return 0;
 }
 
 // reinstall packages whose files are missing or corrupt
-static void do_fix(ZpkConfiguration *pConf, vec_char_ptr *pTargets) {
+static int do_fix(ZpkConfiguration *pConf, vec_char_ptr *pTargets) {
   (void)pConf;
   (void)pTargets;
+  return 0;
 }
 
-static void do_list(ZpkConfiguration *pConf, bool installed, bool upgradable,
-                    bool available) {
+static int do_list(ZpkConfiguration *pConf, bool installed, bool upgradable,
+                   bool available) {
   (void)pConf;
   (void)installed;
   (void)upgradable;
   (void)available;
+  return 0;
 }
 
 // which package owns each path
-static void do_owner(ZpkConfiguration *pConf, char *path) {
+static int do_owner(ZpkConfiguration *pConf, char *path) {
   (void)pConf;
   (void)path;
+  return 0;
 }
 
 int main(int argc, char **argv) {
   ZpkConfiguration configuration;
   ZpkOperation operation;
   parse_args(argc, argv, &configuration, &operation);
+  defer delete_ZpkOperation(&operation);
+  defer delete_ZpkConfiguration(&configuration);
 
   switch (operation.op) {
   case ZPK_OP_ADD:
-    do_add(&configuration, &operation.add.targets, operation.dry_run);
-    break;
+    return do_add(&configuration, &operation.add.targets, operation.dry_run);
   case ZPK_OP_FETCH:
-    do_fetch(&configuration, &operation.fetch.targets,
-             operation.fetch.output_dir);
-    break;
+    return do_fetch(&configuration, &operation.fetch.targets,
+                    operation.fetch.output_dir);
   case ZPK_OP_DEL:
-    do_del(&configuration, &operation.del.targets, operation.dry_run);
-    break;
+    return do_del(&configuration, &operation.del.targets, operation.dry_run);
   case ZPK_OP_UPGRADE:
-    do_upgrade(&configuration, &operation.upgrade.targets);
-    break;
+    return do_upgrade(&configuration, &operation.upgrade.targets);
   case ZPK_OP_FIX:
-    do_fix(&configuration, &operation.fix.targets);
-    break;
+    return do_fix(&configuration, &operation.fix.targets);
   case ZPK_OP_LIST:
-    do_list(&configuration, operation.list.installed, operation.list.upgradable,
-            operation.list.available);
-    break;
+    return do_list(&configuration, operation.list.installed,
+                   operation.list.upgradable, operation.list.available);
   case ZPK_OP_OWNER:
-    do_owner(&configuration, operation.owner.path);
-    break;
+    return do_owner(&configuration, operation.owner.path);
   }
-
-  delete_ZpkOperation(&operation);
-  delete_ZpkConfiguration(&configuration);
-  return 0;
 }

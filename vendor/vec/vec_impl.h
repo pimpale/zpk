@@ -24,8 +24,12 @@
 #define VEC_FN(suffix) VEC_PASTE(VEC_T, suffix)
 
 void VEC_FN(_init)(VEC_T *vec) {
+  VEC_FN(_init_cap)(vec, 16);
+}
+
+void VEC_FN(_init_cap)(VEC_T *vec, size_t cap) {
   vec->len = 0;
-  vec->cap = 16;
+  vec->cap = cap;
   vec->pData = (VEC_DTYPE*)malloc(vec->cap * sizeof(VEC_DTYPE));
 }
 
@@ -51,7 +55,7 @@ void VEC_FN(_get)(const VEC_T *vec, size_t i, VEC_DTYPE *dest) {
   *dest = vec->pData[i];
 }
 
-VEC_DTYPE *VEC_FN(_at)(VEC_T *vec, size_t i) {
+VEC_DTYPE *VEC_FN(_at)(const VEC_T *vec, size_t i) {
   assert(i < vec->len);
   return &vec->pData[i];
 }

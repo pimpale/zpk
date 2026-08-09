@@ -34,10 +34,7 @@ typedef enum ErrVal {
 
 const char *levelstrerror(ErrSeverity level);
 
-// Messages below this severity are dropped. Defaults to ERR_LEVEL_WARN; -v
-// lowers it to ERR_LEVEL_INFO and -vv to ERR_LEVEL_DEBUG. Set by parse_args as
-// soon as it sees the flag, so that config resolution logs at the right level.
-extern ErrSeverity zpk_log_level;
+extern ErrSeverity g_log_level;
 
 #define UNUSED __attribute__((unused))
 #define PANIC() exit(EXIT_FAILURE)
@@ -46,7 +43,7 @@ extern ErrSeverity zpk_log_level;
 // command was asked to produce and stays safe to pipe.
 #define LOG_ERROR(level, msg)                                                  \
   do {                                                                         \
-    if ((level) >= zpk_log_level) {                                            \
+    if ((level) >= g_log_level) {                                            \
       fprintf(stderr, "%s: %s: %s\n", ERROR_APPNAME, levelstrerror(level),     \
               msg);                                                            \
     }                                                                          \
@@ -54,7 +51,7 @@ extern ErrSeverity zpk_log_level;
 
 #define LOG_ERROR_ARGS(level, fmt, ...)                                        \
   do {                                                                         \
-    if ((level) >= zpk_log_level) {                                            \
+    if ((level) >= g_log_level) {                                            \
       char macro_message_formatted[ERROR_MAX_PRINT_LENGTH];                    \
       snprintf(macro_message_formatted, ERROR_MAX_PRINT_LENGTH, fmt,           \
                __VA_ARGS__);                                                   \
