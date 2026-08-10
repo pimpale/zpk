@@ -42,6 +42,28 @@ static char *resolve_config_relative(const char *config_path, const char *raw) {
   return resolved;
 }
 
+// validates one apk-style protected path rule from config key `key` and
+// appends a copy to out. rules are sysroot-relative masks, so unlike
+// repositories they are never resolved against the config file's directory
+static void push_protected_path(vec_char_ptr *out, const char *config_path,
+                                const char *key, const TomlValue *elem) {
+  if (elem->type != TOML_STRING) {
+    LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "%s: %s must be strings", config_path,
+                   key);
+    PANIC();
+  }
+  const char *rule = elem->value.string->str;
+  if (rule[0] != '+' || rule[1] == '\0') {
+    LOG_ERROR_ARGS(ERR_LEVEL_FATAL,
+                   "%s: %s: rule \"%s\" must be '+' followed by a path "
+                   "('+' is the only supported protection mode)",
+                   config_path, key, rule);
+    PANIC();
+  }
+  char_ptr copy = strdup(rule);
+  vec_char_ptr_push(out, &copy);
+}
+
 static void maybe_apply_config_file(ZpkConfiguration *config, const char *path,
                                     bool cli_specified) {
   FILE *maybe_file = fopen(path, "r");
@@ -132,6 +154,37 @@ static void maybe_apply_config_file(ZpkConfiguration *config, const char *path,
     }
   }
 
+  val = toml_table_get(table, "protected-paths");
+  if (val != NULL) {
+    if (val->type != TOML_ARRAY) {
+      LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "%s: protected-paths must be an array",
+                     path);
+      PANIC();
+    }
+    // protected-paths (and not extra-protected-paths) replaces any rules
+    // from lower-precedence config files
+    vec_char_ptr_clear_and_freeowned(&config->protected_paths);
+    for (size_t i = 0; i < val->value.array->len; i++) {
+      push_protected_path(&config->protected_paths, path, "protected-paths",
+                          val->value.array->elements[i]);
+    }
+  }
+
+  val = toml_table_get(table, "extra-protected-paths");
+  if (val != NULL) {
+    if (val->type != TOML_ARRAY) {
+      LOG_ERROR_ARGS(ERR_LEVEL_FATAL,
+                     "%s: extra-protected-paths must be an array", path);
+      PANIC();
+    }
+    // extra-protected-paths appends, keeping the rules that are already there
+    for (size_t i = 0; i < val->value.array->len; i++) {
+      push_protected_path(&config->protected_paths, path,
+                          "extra-protected-paths",
+                          val->value.array->elements[i]);
+    }
+  }
+
   toml_table_free(table);
 }
 
@@ -183,6 +236,7 @@ static void resolve_configuration(ZpkConfiguration *config,
   config->sysroot = NULL;
   config->pkgs_path = NULL;
   vec_char_ptr_init(&config->repositories);
+  vec_char_ptr_init(&config->protected_paths);
 
   // we check in reverse order of precedence, so that later sources override
   // earlier ones.
@@ -285,6 +339,7 @@ void delete_ZpkConfiguration(ZpkConfiguration *config) {
   free(config->sysroot);
   free(config->pkgs_path);
   vec_char_ptr_delete_and_freeowned(&config->repositories);
+  vec_char_ptr_delete_and_freeowned(&config->protected_paths);
 }
 
 static const char *USAGE =

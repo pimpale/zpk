@@ -13,6 +13,9 @@ typedef struct {
   char *pkgs_path;
   // a list of repositories (in URI format)
   vec_char_ptr repositories;
+  // See https://man.archlinux.org/man/apk-protected_paths.5.en
+  // only supports + for now
+  vec_char_ptr protected_paths;
 } ZpkConfiguration;
 
 void delete_ZpkConfiguration(ZpkConfiguration *config);

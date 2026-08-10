@@ -82,6 +82,35 @@ static void set_errno_from_win32(DWORD error) {
 }
 #endif
 
+path_type path_type_portable(const char *path) {
+#if defined(_WIN32) || defined(_WIN64)
+  DWORD attrs = GetFileAttributesA(path);
+  if (attrs == INVALID_FILE_ATTRIBUTES) {
+    DWORD error = GetLastError();
+    if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) {
+      return PATH_TYPE_MISSING;
+    }
+    set_errno_from_win32(error);
+    return PATH_TYPE_ERROR;
+  }
+  return (attrs & FILE_ATTRIBUTE_DIRECTORY) ? PATH_TYPE_DIR : PATH_TYPE_FILE;
+#else
+  struct stat st;
+  if (stat(path, &st) != 0) {
+    // ENOTDIR: a parent component exists but is a file, so path can't exist
+    return errno == ENOENT || errno == ENOTDIR ? PATH_TYPE_MISSING
+                                               : PATH_TYPE_ERROR;
+  }
+  if (S_ISDIR(st.st_mode)) {
+    return PATH_TYPE_DIR;
+  }
+  if (S_ISREG(st.st_mode)) {
+    return PATH_TYPE_FILE;
+  }
+  return PATH_TYPE_OTHER;
+#endif
+}
+
 // like POSIX rename: atomically replaces newpath if it already exists.
 // (the Windows CRT rename fails on an existing target, so we go through
 // MoveFileEx instead)

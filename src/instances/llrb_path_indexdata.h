@@ -3,10 +3,17 @@
 
 #include "instances/llrb_char_ptr_fileclaim.h"
 
-// per-path index data. claims holds every package's claim on this path (one
-// is the common case, more means packages share or conflict); path-specific
-// fields that aren't per-claimant belong here alongside it
 typedef struct {
+  bool exists;
+  // these 2 are only defined if it actually exists
+  bool is_directory; 
+  uint32_t crc32; // only defined if is_directory == false
+} FileStatus;
+
+
+typedef struct {
+  bool computed_actual;
+  FileStatus actual;
   // Map<PackageName, FileClaim>
   llrb_char_ptr_fileclaim claims;
 } IndexData;

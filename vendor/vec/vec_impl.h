@@ -16,6 +16,7 @@
 
 #include <assert.h>
 #include <stdlib.h>
+#include <string.h>
 #include <vec/vec.h>
 
 #define VEC_PASTE_(a, b) a##b
@@ -40,6 +41,20 @@ void VEC_FN(_push)(VEC_T *vec, const VEC_DTYPE *src) {
   }
   vec->pData[vec->len] = *src;
   vec->len++;
+}
+
+void VEC_FN(_append)(VEC_T *vec, const VEC_T *src) {
+  if (src->len == 0) {
+    return;
+  }
+  if (vec->len + src->len > vec->cap) {
+    while (vec->len + src->len > vec->cap) {
+      vec->cap *= 2;
+    }
+    vec->pData = (VEC_DTYPE*)realloc(vec->pData, vec->cap * sizeof(VEC_DTYPE));
+  }
+  memcpy(&vec->pData[vec->len], src->pData, src->len * sizeof(VEC_DTYPE));
+  vec->len += src->len;
 }
 
 void VEC_FN(_pop)(VEC_T *vec, VEC_DTYPE *dest) {
