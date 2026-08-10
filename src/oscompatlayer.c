@@ -138,7 +138,8 @@ static void listdir_push(vec_char_ptr *out, const char *name) {
   vec_char_ptr_push(out, &copy);
 }
 
-int listdir_portable(const char *path, vec_char_ptr *out) {
+int listdir_portable(const char *path, vec_char_ptr *out_files,
+                     vec_char_ptr *out_dirs) {
 #if defined(_WIN32) || defined(_WIN64)
   // FindFirstFile takes a pattern, not a directory
   char *pattern = malloc(strlen(path) + 3);
@@ -163,7 +164,15 @@ int listdir_portable(const char *path, vec_char_ptr *out) {
   do {
     if (strcmp(find_data.cFileName, ".") != 0 &&
         strcmp(find_data.cFileName, "..") != 0) {
-      listdir_push(out, find_data.cFileName);
+      // reparse points (symlinks, junctions) count as files even when the
+      // directory attribute is also set
+      bool is_dir =
+          (find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 &&
+          (find_data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0;
+      vec_char_ptr *dest = is_dir ? out_dirs : out_files;
+      if (dest != NULL) {
+        listdir_push(dest, find_data.cFileName);
+      }
     }
   } while (FindNextFileA(handle, &find_data));
   DWORD error = GetLastError();
@@ -182,8 +191,40 @@ int listdir_portable(const char *path, vec_char_ptr *out) {
   errno = 0;
   for (struct dirent *entry = readdir(dir); entry != NULL;
        entry = readdir(dir)) {
-    if (strcmp(entry->d_name, ".") != 0 && strcmp(entry->d_name, "..") != 0) {
-      listdir_push(out, entry->d_name);
+    if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+      errno = 0;
+      continue;
+    }
+    bool is_dir;
+    if (entry->d_type == DT_DIR) {
+      is_dir = true;
+    } else if (entry->d_type != DT_UNKNOWN) {
+      // includes DT_LNK: symlinks count as files even when they point at a
+      // directory
+      is_dir = false;
+    } else {
+      // filesystem doesn't report entry types; classify with lstat (not
+      // stat, so symlinks stay files)
+      char *full = malloc(strlen(path) + 1 + strlen(entry->d_name) + 1);
+      if (full == NULL) {
+        LOG_ERROR(ERR_LEVEL_FATAL,
+                  "could not allocate memory for directory listing");
+        PANIC();
+      }
+      sprintf(full, "%s/%s", path, entry->d_name);
+      struct stat st;
+      int rc = lstat(full, &st);
+      free(full);
+      if (rc != 0) {
+        // entry vanished between readdir and lstat; skip it
+        errno = 0;
+        continue;
+      }
+      is_dir = S_ISDIR(st.st_mode);
+    }
+    vec_char_ptr *dest = is_dir ? out_dirs : out_files;
+    if (dest != NULL) {
+      listdir_push(dest, entry->d_name);
     }
     errno = 0;
   }

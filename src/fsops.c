@@ -286,7 +286,7 @@ void build_file_index(llrb_path_indexdata *index, char *pkgs_path) {
   vec_char_ptr_init(&entries);
   defer vec_char_ptr_delete_and_freeowned(&entries);
 
-  if (listdir_portable(pkgs_path, &entries) != 0) {
+  if (listdir_portable(pkgs_path, &entries, NULL) != 0) {
     LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "index: unable to list files in %s: %s",
                    pkgs_path, strerror(errno));
     return;
@@ -538,6 +538,87 @@ static void compute_match_status(
   }
 }
 
+bool in_protected_paths(vec_char_ptr *protected_paths, char *path) {
+  // TODO: implement this
+  return true;
+}
+
+char *mkfullpath(const char *sysroot, const char *path, const char *suffix) {
+  char *fullpath =
+      malloc(strlen(sysroot) + 1 + strlen(path) + strlen(suffix) + 1);
+  sprintf(fullpath, "%s/%s%s", sysroot, path, suffix);
+  return fullpath;
+}
+
+// rm -rf on the path
+// needed for when there is something blocking the way on our installation, and
+// it's not a protected path
+// doesn't log errors if it's not actually a directory. Only logs errors if we fail to read a file
+static ErrVal fsops_rm_rf(const char *sysroot, const char *path,
+                          const char *suffix,
+                          //for logging. null to omit
+                          const char* op, const char* pkg,
+                          // appends to this
+                          vec_fsop *fsops
+
+) {
+  char *fullpath = mkfullpath(sysroot, path, suffix);
+
+  vec_char_ptr dirs_to_list;
+  vec_char_ptr_init(&dirs_to_list);
+  vec_char_ptr_push(&dirs_to_list, &fullpath);
+  defer vec_char_ptr_delete_and_freeowned(&dirs_to_list);
+
+  vec_char_ptr dir_entries;
+  vec_char_ptr_init(&dir_entries);
+  defer vec_char_ptr_delete_and_freeowned(&dir_entries);
+
+  vec_char_ptr file_entries;
+  vec_char_ptr_init(&file_entries);
+  defer vec_char_ptr_delete_and_freeowned(&file_entries);
+
+  while(vec_char_ptr_len(&dirs_to_list) > 0) {
+    char* p;
+    vec_char_ptr_pop(&dirs_to_list, &p);
+
+    listdir_portable(p, &file_entries, &dir_entries);
+
+    for()
+    vec_char_ptr_clear_and_freeowned(&file_entries);
+
+  }
+  return ERR_OK;
+}
+
+static ErrVal fsops_install_claim(const char *sysroot, const char *path,
+                                  const char *suffix, FileClaim claim,
+                                  size_t zip_index,
+                                  // appends to this
+                                  vec_fsop *fsops) {
+
+  fsop o = {};
+  if (claim.is_directory) {
+    o.kind = FSOP_MKDIR;
+    o.mkdir.path = mkfullpath(sysroot, path, suffix);
+  } else {
+    o.kind = FSOP_CREATEFILE;
+    o.createfile.file_index = claim.file_index;
+    o.createfile.zip_index = zip_index;
+  }
+  vec_fsop_push(fsops, &o);
+  return ERR_OK;
+}
+
+static ErrVal fsops_mv(const char *sysroot, const char *frompath,
+                       const char *fromsuffix, const char *topath,
+                       const char *tosuffix, vec_fsop *fsops) {
+  fsop o = {.kind = FSOP_RENAME,
+            .rename = {.from = mkfullpath(sysroot, frompath, fromsuffix),
+                       .to = mkfullpath(sysroot, topath, tosuffix)}};
+  vec_fsop_push(fsops, &o);
+  return ERR_OK;
+}
+
 ErrVal install_package(
     // appends to this if the operation would succeed
     vec_fsop *fsops,
@@ -551,28 +632,27 @@ ErrVal install_package(
     // zip file to install
     char *package_path,
     // where to install
-    char *sysroot) {
+    char *sysroot,
+    // protected paths
+    vec_char_ptr *protected_paths) {
 
   llrb_char_ptr_fileclaim claims;
-  {
-    mz_zip_archive zip;
-    mz_zip_zero_struct(&zip);
-    if (!mz_zip_reader_init_file(&zip, package_path, 0)) {
-      LOG_ERROR_ARGS(ERR_LEVEL_ERROR,
-                     "install %s: could not open zip archive %s: %s", package,
-                     package_path,
-                     mz_zip_get_error_string(mz_zip_get_last_error(&zip)));
-      return ERR_UNKNOWN;
-    }
-    collect_file_claims(&zip, "install", package, &claims);
-    mz_zip_reader_end(&zip);
+  mz_zip_archive zip;
+  mz_zip_zero_struct(&zip);
+  if (!mz_zip_reader_init_file(&zip, package_path, 0)) {
+    LOG_ERROR_ARGS(ERR_LEVEL_ERROR,
+                   "install %s: could not open zip archive %s: %s", package,
+                   package_path,
+                   mz_zip_get_error_string(mz_zip_get_last_error(&zip)));
+    return ERR_UNKNOWN;
   }
+  collect_file_claims(&zip, "install", package, &claims);
+
+  // the zip index of the main pac
+  size_t zip_index = vec_mz_zip_archive_len(zips);
 
   vec_fsop pkfsops;
   defer vec_fsop_delete_and_freeowned(&pkfsops);
-
-  vec_mz_zip_archive pkzips;
-  defer vec_mz_zip_archive_delete_and_freeowned(&pkzips);
 
   bool should_not_install = false;
 
@@ -590,36 +670,44 @@ ErrVal install_package(
 
     if (exists) {
       if (matchesus) {
-        // already exists and matches us
-        continue;
+        // already exists and matches us, do nothing
       } else if (matchesother) {
         LOG_ERROR_ARGS(
             ERR_LEVEL_ERROR,
             "install %s: file conflict on %s: file exists and matches %s",
             package, path, otherpackage);
         should_not_install = true;
-        continue;
       } else {
-        // is an unowned file
-        
-        // we need to save it to .zpksave (both directories and files)
-        // but first we need to ensure that the current contents of .zpksave are deleted
-
+        if (in_protected_paths(protected_paths, path)) {
+          if(fsops_rm_rf(sysroot, path, ".zpknew", "install", package, &pkfsops) != ERR_OK) {
+            should_not_install = true;
+            continue;
+          }
+          fsops_install_claim(sysroot, path, ".zpknew", claim, zip_index,
+                              &pkfsops);
+        } else {
+          if(fsops_rm_rf(sysroot, path, ".zpksave", &pkfsops) != ERR_OK) {
+            should_not_install = true;
+            continue;
+          }
+          fsops_mv(sysroot, path, "", path, ".zpksave", &pkfsops);
+          fsops_install_claim(sysroot, path, "", claim, zip_index, &pkfsops);
+        }
       }
+    } else {
+      fsops_install_claim(sysroot, path, "", claim, zip_index, &pkfsops);
     }
-
-    vec_fsop_push(&pkfsops, &o);
   }
 
   if (should_not_install) {
+    mz_zip_reader_end(&zip);
     return ERR_UNSAFE;
   }
 
-  // if all good transfer ownership of newly created pkgs and zips
+  // if all good transfer ownership of newly created pkgs and zip
   vec_fsop_append(fsops, &pkfsops);
   vec_fsop_clear(&pkfsops);
-  vec_mz_zip_archive_append(zips, &pkzips);
-  vec_mz_zip_archive_clear(&pkzips);
+  vec_mz_zip_archive_push(zips, &zip);
 
   return ERR_OK;
 }
@@ -637,7 +725,9 @@ ErrVal uninstall_package(
     // zip file to uninstall
     char *package_path,
     // where to uninstall
-    char *sysroot) {
+    char *sysroot,
+    // protected paths
+    vec_char_ptr *protected_paths) {
 
   llrb_char_ptr_fileclaim claims;
   {
@@ -759,7 +849,7 @@ ErrVal uninstall_package(
       char *repository = *vec_char_ptr_at(repositories, i);
       LOG_ERROR_ARGS(ERR_LEVEL_INFO, "resolve: listing files in %s",
                      repository);
-      if (listdir_portable(repository, &entries[i]) != 0) {
+      if (listdir_portable(repository, &entries[i], NULL) != 0) {
         LOG_ERROR_ARGS(ERR_LEVEL_ERROR,
                        "resolve: unable to list files in %s: %s", repository,
                        strerror(errno));

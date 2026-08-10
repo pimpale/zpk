@@ -22,10 +22,14 @@ int mkdir_portable(const char* path, int mode);
 int rmdir_portable(const char* path);
 int rename_portable(const char* oldpath, const char* newpath);
 // appends the names of path's entries (excluding "." and "..", without any
-// path prefix, strdup'd so the caller owns them) to out in unspecified order;
-// the consumer sorts if it needs determinism. directories are included; the
-// caller filters. returns -1 with errno set on failure, in which case entries
-// read before the failure may remain in out.
-int listdir_portable(const char* path, vec_char_ptr* out);
+// path prefix, strdup'd so the caller owns them) to out_files and out_dirs in
+// unspecified order; either vector may be NULL to skip entries of that kind.
+// symlinks always count as files, never directories, even when they point at
+// one (following them risks traversal loops and over-deletion); anything that
+// is not a directory counts as a file. the consumer sorts if it needs
+// determinism. returns -1 with errno set on failure, in which case entries
+// read before the failure may remain in the vectors.
+int listdir_portable(const char* path, vec_char_ptr* out_files,
+                     vec_char_ptr* out_dirs);
 
 #endif // oscompatlayer_h_INCLUDED

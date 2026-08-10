@@ -21,7 +21,7 @@ typedef struct {
     } rename;
     struct {
       char *path;
-      uint32_t zip_index;
+      size_t zip_index;
       uint32_t file_index;
     } createfile;
     struct {

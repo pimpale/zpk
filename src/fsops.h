@@ -29,7 +29,9 @@ ErrVal install_package(
     // zip file to install
     char *package_path,
     // where to install
-    char *sysroot);
+    char *sysroot,
+    // protected paths
+    vec_char_ptr *protected_paths);
 
 ErrVal uninstall_package(
     // appends to this if the operation would succeed
@@ -44,7 +46,9 @@ ErrVal uninstall_package(
     // zip file to uninstall
     char *package_path,
     // where to uninstall
-    char *sysroot);
+    char *sysroot,
+    // protected paths
+    vec_char_ptr *protected_paths);
 
 void execute_fsops(
     // executes these
