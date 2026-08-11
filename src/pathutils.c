@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "asprintf/asprintf.h"
 #include "error.h"
 #include "oscompatlayer.h"
 
@@ -20,14 +21,11 @@ char *expandtilde(const char *input) {
               "could not determine home directory for tilde expansion");
     PANIC();
   }
-  size_t home_len = strlen(home);
-  size_t input_len = strlen(input);
-  char *expanded = (char *)malloc(home_len + input_len);
-  if (expanded == NULL) {
+  char *expanded;
+  if (asprintf(&expanded, "%s%s", home, input + 1) < 0) {
     LOG_ERROR(ERR_LEVEL_FATAL, "could not allocate memory for tilde expansion");
     PANIC();
   }
-  sprintf(expanded, "%s%s", home, input + 1);
   return expanded;
 }
 

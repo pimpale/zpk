@@ -1,5 +1,6 @@
 #include "configuration.h"
 
+#include "asprintf/asprintf.h"
 #include "error.h"
 #include "oscompatlayer.h"
 #include "pathutils.h"
@@ -35,9 +36,8 @@ static char *resolve_config_relative(const char *config_path, const char *raw) {
   }
 
   size_t dir_len = (size_t)(last_slash - config_path);
-  char *resolved = malloc(dir_len + 1 + strlen(expanded) + 1);
-  snprintf(resolved, dir_len + 1 + strlen(expanded) + 1, "%.*s/%s",
-           (int)dir_len, config_path, expanded);
+  char *resolved;
+  asprintf(&resolved, "%.*s/%s", (int)dir_len, config_path, expanded);
   free(expanded);
   return resolved;
 }
@@ -274,9 +274,8 @@ static void resolve_configuration(ZpkConfiguration *config,
         break;
       }
       cwd[i] = '\0';
-      char *config_path =
-          (char *)malloc(i + 1 + strlen(CONFIGURATION_FILE_NAME) + 1);
-      sprintf(config_path, "%s/%s", cwd, CONFIGURATION_FILE_NAME);
+      char *config_path;
+      asprintf(&config_path, "%s/%s", cwd, CONFIGURATION_FILE_NAME);
       maybe_apply_config_file(config, config_path, false);
       free(config_path);
       if (!at_end) {
@@ -310,9 +309,8 @@ static void resolve_configuration(ZpkConfiguration *config,
     size_t sysroot_len = strlen(config->sysroot);
     bool trailing_slash =
         sysroot_len > 0 && config->sysroot[sysroot_len - 1] == '/';
-    config->pkgs_path = (char *)malloc(sysroot_len + sizeof "/pkg");
-    snprintf(config->pkgs_path, sysroot_len + sizeof "/pkg",
-             trailing_slash ? "%spkg" : "%s/pkg", config->sysroot);
+    asprintf(&config->pkgs_path, trailing_slash ? "%spkg" : "%s/pkg",
+             config->sysroot);
   }
   // sysroot and pkgs_path are assembled from joins that can leave "."
   // components or doubled slashes behind (e.g. "$cwd/./zpkroot"); clean them

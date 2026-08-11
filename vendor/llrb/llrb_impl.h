@@ -110,11 +110,13 @@ static LLRB_NODE_T *LLRB_LOCAL(fix_up)(LLRB_NODE_T *h) {
 
 // `spare`, when non-NULL, supplies the new node's storage instead of
 // LLRB_NODE_MALLOC — the _insert_node path, which therefore cannot fail with
-// OOM (result -1).
+// OOM (result -1). On result 1 `*inserted` receives the new node; rotations
+// never move payloads, so that address stays valid once the walk unwinds.
 static LLRB_NODE_T *LLRB_LOCAL(insert)(LLRB_NODE_T *h, LLRB_NODE_T *parent,
                                        const LLRB_KEY *key,
                                        const LLRB_VALUE *value,
-                                       LLRB_NODE_T *spare, int *result) {
+                                       LLRB_NODE_T *spare, int *result,
+                                       LLRB_NODE_T **inserted) {
   if (h == NULL) {
     LLRB_NODE_T *n =
         spare != NULL ? spare : LLRB_NODE_MALLOC(sizeof(*n));
@@ -129,19 +131,20 @@ static LLRB_NODE_T *LLRB_LOCAL(insert)(LLRB_NODE_T *h, LLRB_NODE_T *parent,
     n->parent = parent;
     n->red = true;
     *result = 1;
+    *inserted = n;
     return n;
   }
 
   int cmp = LLRB_COMPARE(key, &h->key);
   if (cmp < 0) {
     LLRB_NODE_T *left =
-        LLRB_LOCAL(insert)(h->left, h, key, value, spare, result);
+        LLRB_LOCAL(insert)(h->left, h, key, value, spare, result, inserted);
     if (*result < 0)
       return h;
     h->left = left;
   } else if (cmp > 0) {
     LLRB_NODE_T *right =
-        LLRB_LOCAL(insert)(h->right, h, key, value, spare, result);
+        LLRB_LOCAL(insert)(h->right, h, key, value, spare, result, inserted);
     if (*result < 0)
       return h;
     h->right = right;
@@ -274,32 +277,37 @@ void LLRB_FN(_clear)(LLRB_T *tree) {
 
 void LLRB_FN(_delete)(LLRB_T *tree) { LLRB_FN(_clear)(tree); }
 
-bool LLRB_FN(_insert)(LLRB_T *tree, const LLRB_KEY *key,
-                      const LLRB_VALUE *value) {
+LLRB_VALUE *LLRB_FN(_insert)(LLRB_T *tree, const LLRB_KEY *key,
+                             const LLRB_VALUE *value) {
   int result = 0;
-  tree->root =
-      LLRB_LOCAL(insert)(tree->root, NULL, key, value, NULL, &result);
+  LLRB_NODE_T *inserted = NULL;
+  tree->root = LLRB_LOCAL(insert)(tree->root, NULL, key, value, NULL, &result,
+                                  &inserted);
   if (tree->root != NULL) {
     tree->root->parent = NULL;
     tree->root->red = false;
   }
-  if (result == 1)
-    tree->len++;
-  return result == 1;
+  if (result != 1)
+    return NULL;
+  tree->len++;
+  return &inserted->value;
 }
 
-bool LLRB_FN(_insert_node)(LLRB_T *tree, const LLRB_KEY *key,
-                           const LLRB_VALUE *value, LLRB_NODE_T *node) {
+LLRB_VALUE *LLRB_FN(_insert_node)(LLRB_T *tree, const LLRB_KEY *key,
+                                  const LLRB_VALUE *value,
+                                  LLRB_NODE_T *node) {
   int result = 0;
-  tree->root =
-      LLRB_LOCAL(insert)(tree->root, NULL, key, value, node, &result);
+  LLRB_NODE_T *inserted = NULL;
+  tree->root = LLRB_LOCAL(insert)(tree->root, NULL, key, value, node, &result,
+                                  &inserted);
   if (tree->root != NULL) {
     tree->root->parent = NULL;
     tree->root->red = false;
   }
-  if (result == 1)
-    tree->len++;
-  return result == 1;
+  if (result != 1)
+    return NULL;
+  tree->len++;
+  return &inserted->value;
 }
 
 bool LLRB_FN(_get)(const LLRB_T *tree, const LLRB_KEY *key,

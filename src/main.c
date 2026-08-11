@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "asprintf/asprintf.h"
 #include "configuration.h"
 #include "fsops.h"
 
@@ -35,9 +36,8 @@ static int do_add(ZpkConfiguration *pConf, vec_char_ptr *packages,
 
   for (size_t i = 0; i < n_targets; i++) {
     char *package = *vec_char_ptr_at(packages, i);
-    char *package_path =
-        malloc(strlen(pConf->pkgs_path) + 1 + strlen(package) + 1);
-    sprintf(package_path, "%s/%s", pConf->pkgs_path, package);
+    char *package_path;
+    asprintf(&package_path, "%s/%s", pConf->pkgs_path, package);
     vec_char_ptr_push(&package_paths, &package_path);
   }
 

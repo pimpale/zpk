@@ -72,8 +72,11 @@ void LLRB_FN(_new)(LLRB_T *tree);
 void LLRB_FN(_delete)(LLRB_T *tree);
 void LLRB_FN(_clear)(LLRB_T *tree);
 
-bool LLRB_FN(_insert)(LLRB_T *tree, const LLRB_KEY *key,
-                      const LLRB_VALUE *value);
+// Returns a pointer to the value stored in the tree, or NULL if the key was
+// already present or the node allocation failed. The pointer stays valid
+// until that entry is removed.
+LLRB_VALUE *LLRB_FN(_insert)(LLRB_T *tree, const LLRB_KEY *key,
+                             const LLRB_VALUE *value);
 bool LLRB_FN(_remove)(LLRB_T *tree, const LLRB_KEY *key,
                       LLRB_VALUE *old_value);
 bool LLRB_FN(_get)(const LLRB_T *tree, const LLRB_KEY *key,
@@ -99,13 +102,13 @@ void LLRB_FN(_iter_lower_bound)(const LLRB_T *tree, const LLRB_KEY *key,
 // Allocation-free relink pair. _extract removes *key like _remove but
 // hands back the unlinked node instead of freeing it; _insert_node
 // inserts key/value reusing that node's storage (no allocation, so it
-// cannot fail with OOM — false means duplicate key, and the node stays
+// cannot fail with OOM — NULL means duplicate key, and the node stays
 // the caller's). Together they move an entry between two same-typed
 // trees with strictly pointer work.
 bool LLRB_FN(_extract)(LLRB_T *tree, const LLRB_KEY *key,
                        LLRB_VALUE *old_value, LLRB_NODE_T **node_out);
-bool LLRB_FN(_insert_node)(LLRB_T *tree, const LLRB_KEY *key,
-                           const LLRB_VALUE *value, LLRB_NODE_T *node);
+LLRB_VALUE *LLRB_FN(_insert_node)(LLRB_T *tree, const LLRB_KEY *key,
+                                  const LLRB_VALUE *value, LLRB_NODE_T *node);
 
 // Intended for tests and diagnostics: checks ordering, parent links, left
 // leaning, red adjacency, black height, and the recorded node count.

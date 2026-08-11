@@ -1,3 +1,11 @@
+// this file is the platform shim: the rest of src/ is strict ISO C, and every
+// non-ISO interface the program needs is reached from here. POSIX.1-2008
+// §2.2.1 requires the conformance level to be requested before any header is
+// included, so this must stay above the includes below.
+#if !defined(_WIN32) && !defined(_WIN64)
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include "error.h"
 #include <errno.h>
 #include <stdio.h>
@@ -13,6 +21,7 @@
 #include <unistd.h>
 #endif
 
+#include "asprintf/asprintf.h"
 #include "oscompatlayer.h"
 
 const char *getenv_home_portable(void) {
@@ -26,10 +35,8 @@ const char *getenv_home_portable(void) {
 
 char *getcwd_portable(void) {
 #if defined(_WIN32) || defined(_WIN64)
+  // the Windows CRT allocates for us when given a NULL buffer
   char *cwd = _getcwd(NULL, 0);
-#else
-  char *cwd = getcwd(NULL, 0);
-#endif
   if (cwd == NULL) {
     LOG_ERROR_ARGS(ERR_LEVEL_FATAL,
                    "could not get current working directory: %s",
@@ -37,6 +44,30 @@ char *getcwd_portable(void) {
     PANIC();
   }
   return cwd;
+#else
+  // POSIX leaves getcwd(NULL, 0) unspecified (allocating is a glibc/BSD
+  // extension), so grow our own buffer until the path fits. ERANGE is the
+  // only failure worth retrying; anything else is fatal
+  for (size_t size = 256;; size *= 2) {
+    char *cwd = malloc(size);
+    if (cwd == NULL) {
+      LOG_ERROR(ERR_LEVEL_FATAL,
+                "could not allocate memory for current working directory");
+      PANIC();
+    }
+    if (getcwd(cwd, size) != NULL) {
+      return cwd;
+    }
+    int saved_errno = errno;
+    free(cwd);
+    if (saved_errno != ERANGE) {
+      LOG_ERROR_ARGS(ERR_LEVEL_FATAL,
+                     "could not get current working directory: %s",
+                     strerror(saved_errno));
+      PANIC();
+    }
+  }
+#endif
 }
 
 int mkdir_portable(const char *path, int mode) {
@@ -44,7 +75,8 @@ int mkdir_portable(const char *path, int mode) {
   (void)mode; // mode is ignored on Windows
   return _mkdir(path);
 #else
-  return mkdir(path, mode);
+  // the portable signature takes int, since mode_t only exists on POSIX
+  return mkdir(path, (mode_t)mode);
 #endif
 }
 
@@ -142,13 +174,12 @@ int listdir_portable(const char *path, vec_char_ptr *out_files,
                      vec_char_ptr *out_dirs) {
 #if defined(_WIN32) || defined(_WIN64)
   // FindFirstFile takes a pattern, not a directory
-  char *pattern = malloc(strlen(path) + 3);
-  if (pattern == NULL) {
+  char *pattern;
+  if (asprintf(&pattern, "%s/*", path) < 0) {
     LOG_ERROR(ERR_LEVEL_FATAL,
               "could not allocate memory for directory listing");
     PANIC();
   }
-  sprintf(pattern, "%s/*", path);
   WIN32_FIND_DATAA find_data;
   HANDLE handle = FindFirstFileA(pattern, &find_data);
   free(pattern);
@@ -195,34 +226,24 @@ int listdir_portable(const char *path, vec_char_ptr *out_files,
       errno = 0;
       continue;
     }
-    bool is_dir;
-    if (entry->d_type == DT_DIR) {
-      is_dir = true;
-    } else if (entry->d_type != DT_UNKNOWN) {
-      // includes DT_LNK: symlinks count as files even when they point at a
-      // directory
-      is_dir = false;
-    } else {
-      // filesystem doesn't report entry types; classify with lstat (not
-      // stat, so symlinks stay files)
-      char *full = malloc(strlen(path) + 1 + strlen(entry->d_name) + 1);
-      if (full == NULL) {
-        LOG_ERROR(ERR_LEVEL_FATAL,
-                  "could not allocate memory for directory listing");
-        PANIC();
-      }
-      sprintf(full, "%s/%s", path, entry->d_name);
-      struct stat st;
-      int rc = lstat(full, &st);
-      free(full);
-      if (rc != 0) {
-        // entry vanished between readdir and lstat; skip it
-        errno = 0;
-        continue;
-      }
-      is_dir = S_ISDIR(st.st_mode);
+    // classify with lstat (not stat, so symlinks stay files). dirent's d_type
+    // would save the syscall, but it is a BSD extension no POSIX conformance
+    // level exposes, and it is absent entirely on some systems
+    char *full;
+    if (asprintf(&full, "%s/%s", path, entry->d_name) < 0) {
+      LOG_ERROR(ERR_LEVEL_FATAL,
+                "could not allocate memory for directory listing");
+      PANIC();
     }
-    vec_char_ptr *dest = is_dir ? out_dirs : out_files;
+    struct stat st;
+    int rc = lstat(full, &st);
+    free(full);
+    if (rc != 0) {
+      // entry vanished between readdir and lstat; skip it
+      errno = 0;
+      continue;
+    }
+    vec_char_ptr *dest = S_ISDIR(st.st_mode) ? out_dirs : out_files;
     if (dest != NULL) {
       listdir_push(dest, entry->d_name);
     }

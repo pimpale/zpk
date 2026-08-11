@@ -7,6 +7,7 @@
 #include <time.h>
 
 #include "apkver/apkver.h"
+#include "asprintf/asprintf.h"
 #include "constants.h"
 #include "error.h"
 #include "fsop.h"
@@ -211,17 +212,17 @@ static void merge_claims_into_index(llrb_path_indexdata *index,
       IndexData fresh;
       llrb_char_ptr_fileclaim_new(&fresh.claims);
       // the index now owns `path`
-      llrb_path_indexdata_insert(index, &path, &fresh);
-      llrb_path_indexdata_get_ref(index, &path, &data);
+      data = llrb_path_indexdata_insert(index, &path, &fresh);
     } else {
       // path already indexed; the index keeps its own key
       free(path);
     }
 
     char *key = strdup(package);
-    bool inserted = llrb_char_ptr_fileclaim_insert(&data->claims, &key, &claim);
+    FileClaim *inserted =
+        llrb_char_ptr_fileclaim_insert(&data->claims, &key, &claim);
     // duplicate package name should have been caught earlier
-    assert(inserted);
+    assert(inserted != NULL);
   }
   llrb_char_ptr_fileclaim_delete(claims);
 }
@@ -237,12 +238,12 @@ static void remove_claims_from_index(llrb_path_indexdata *index, char *package,
   while (llrb_char_ptr_fileclaim_iter_next(&iter, &path, &claim)) {
     IndexData *data = NULL;
     if (llrb_path_indexdata_get_ref(index, &path, &data)) {
-      FileClaim _claim;
       bool removed =
-          llrb_char_ptr_fileclaim_remove(&data->claims, &package, &_claim);
-      if (removed && data->claims.len == 0) {
-        IndexData _indexdata;
-        llrb_path_indexdata_remove(index, &path, &_indexdata);
+          llrb_char_ptr_fileclaim_remove(&data->claims, &package, NULL);
+
+      // clean up cases where there's no reason to keep the node around
+      if (removed && data->claims.len == 0 && !data->computed_actual) {
+        llrb_path_indexdata_remove(index, &path, NULL);
       }
     }
   }
@@ -297,8 +298,8 @@ void build_file_index(llrb_path_indexdata *index, char *pkgs_path) {
     if (!endswith(entry, ".zip")) {
       continue;
     }
-    char *package_path = malloc(strlen(pkgs_path) + 1 + strlen(entry) + 1);
-    sprintf(package_path, "%s/%s", pkgs_path, entry);
+    char *package_path;
+    asprintf(&package_path, "%s/%s", pkgs_path, entry);
     add_zip_file_index(index, entry, package_path);
     free(package_path);
   }
@@ -336,17 +337,29 @@ static ErrVal file_crc32(const char *path, uint32_t *out, const char *op,
   return ERR_OK;
 }
 
-// ensure that the indexdata exists
 // pass op and pkg to enable logging
-static ErrVal ensure_actual(IndexData *indexdata, const char *sysroot,
-                            const char *path, const char *op, const char *pkg) {
-  if (indexdata->computed_actual) {
-    return ERR_OK;
+// creates an empty llrb leaf if needed
+// returns Indexdata pointer on success, NULL on failure
+static IndexData *ensure_actual(llrb_path_indexdata *index, const char *sysroot,
+                                char *path, const char *op, const char *pkg) {
+  IndexData *indexdata;
+  if (!llrb_path_indexdata_get_ref(index, &path, &indexdata)) {
+    // create a new node for future reference.
+    char *pathkey = strdup(path);
+    IndexData id = {
+        .computed_actual = false,
+    };
+    llrb_char_ptr_fileclaim_new(&id.claims);
+    indexdata = llrb_path_indexdata_insert(index, &pathkey, &id);
   }
 
-  char *fullpath = malloc(strlen(sysroot) + 1 + strlen(path) + 1);
+  if (indexdata->computed_actual) {
+    return indexdata;
+  }
+
+  char *fullpath;
+  asprintf(&fullpath, "%s/%s", sysroot, path);
   defer free(fullpath);
-  sprintf(fullpath, "%s/%s", sysroot, path);
 
   switch (path_type_portable(fullpath)) {
   case PATH_TYPE_MISSING:
@@ -360,7 +373,7 @@ static ErrVal ensure_actual(IndexData *indexdata, const char *sysroot,
     uint32_t crc;
     ErrVal err = file_crc32(fullpath, &crc, op, pkg);
     if (err != ERR_OK) {
-      return err;
+      return NULL;
     }
     indexdata->actual.exists = true;
     indexdata->actual.is_directory = false;
@@ -377,20 +390,18 @@ static ErrVal ensure_actual(IndexData *indexdata, const char *sysroot,
   case PATH_TYPE_ERROR:
     LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "%s %s: could not stat %s: %s", op, pkg,
                    fullpath, strerror(errno));
-    return ERR_UNKNOWN;
+    return NULL;
   }
 
   indexdata->computed_actual = true;
-  return ERR_OK;
+  return indexdata;
 }
 
 static void delete_char_ptr_fileclaims(llrb_char_ptr_fileclaim *claims) {
   llrb_char_ptr_fileclaim_iter claims_iter;
   llrb_char_ptr_fileclaim_iter_begin(claims, &claims_iter);
   char_ptr claims_key;
-  FileClaim _claim;
-  while (
-      llrb_char_ptr_fileclaim_iter_next(&claims_iter, &claims_key, &_claim)) {
+  while (llrb_char_ptr_fileclaim_iter_next(&claims_iter, &claims_key, NULL)) {
     free(claims_key);
   }
   llrb_char_ptr_fileclaim_delete(claims);
@@ -413,9 +424,9 @@ void delete_file_index(llrb_path_indexdata *index) {
 // before children, so install creates them in iteration order
 static ErrVal ensure_sysroot_exists(const char *package, const char *sysroot) {
   // append a trailing '/' so the loop sees a boundary for sysroot itself
-  char *path = malloc(strlen(sysroot) + 2);
+  char *path;
+  asprintf(&path, "%s/", sysroot);
   defer free(path);
-  sprintf(path, "%s/", sysroot);
   // path+1: if sysroot is absolute the first boundary belongs to the root,
   // and creating it would be mkdir_portable(""), which fails with ENOENT
   // rather than EEXIST
@@ -496,8 +507,18 @@ void execute_fsops(vec_fsop *fsops, vec_mz_zip_archive *zips, const char *op,
   }
 }
 
+static bool is_match(FileStatus fs, FileClaim claim) {
+  if (!fs.exists) {
+    return false;
+  }
+  if (fs.is_directory != claim.is_directory) {
+    return false;
+  }
+  return fs.crc32 == claim.crc32;
+}
+
 // compute the status of the actual file wrt the package claims
-static void compute_match_status(
+static ErrVal compute_match_status(
     // index must not contain the package we're considering
     // (natural for installation, means package must be removed from index prior
     // to uninstallation)
@@ -520,81 +541,59 @@ static void compute_match_status(
     bool *exists, bool *matchesus, bool *matchesother,
     // if matchesother is true, sets this string (borrowed from index)
     char **otherpackage) {
-  IndexData *indexdata;
+  *exists = false;
+  *matchesus = false;
+  *matchesother = false;
+  *otherpackage = NULL;
 
-  if (llrb_path_indexdata_get_ref(index, &path, &indexdata)) {
-    ensure_actual(indexdata, sysroot, path, "install", package);
-    if (!indexdata->actual.exists) {
-      *exists = false;
-      *matchesus = false;
-      *matchesother = false;
-    }
-
-    if (claim.is_directory) {
-      if (indexdata->actual.is_directory) {
-        continue;
-      }
-    }
+  IndexData *indexdata =
+      ensure_actual(index, sysroot, path, "install", package);
+  if (indexdata == NULL) {
+    // something went wrong, bail
+    return ERR_UNKNOWN;
   }
-}
+  if (!indexdata->actual.exists) {
+    return ERR_OK;
+  }
+  *exists = true;
+  *matchesus = is_match(indexdata->actual, claim);
 
-bool in_protected_paths(vec_char_ptr *protected_paths, char *path) {
-  // TODO: implement this
-  return true;
-}
-
-char *mkfullpath(const char *sysroot, const char *path, const char *suffix) {
-  char *fullpath =
-      malloc(strlen(sysroot) + 1 + strlen(path) + strlen(suffix) + 1);
-  sprintf(fullpath, "%s/%s%s", sysroot, path, suffix);
-  return fullpath;
-}
-
-// rm -rf on the path
-// needed for when there is something blocking the way on our installation, and
-// it's not a protected path
-// doesn't log errors if it's not actually a directory. Only logs errors if we fail to read a file
-static ErrVal fsops_rm_rf(const char *sysroot, const char *path,
-                          const char *suffix,
-                          //for logging. null to omit
-                          const char* op, const char* pkg,
-                          // appends to this
-                          vec_fsop *fsops
-
-) {
-  char *fullpath = mkfullpath(sysroot, path, suffix);
-
-  vec_char_ptr dirs_to_list;
-  vec_char_ptr_init(&dirs_to_list);
-  vec_char_ptr_push(&dirs_to_list, &fullpath);
-  defer vec_char_ptr_delete_and_freeowned(&dirs_to_list);
-
-  vec_char_ptr dir_entries;
-  vec_char_ptr_init(&dir_entries);
-  defer vec_char_ptr_delete_and_freeowned(&dir_entries);
-
-  vec_char_ptr file_entries;
-  vec_char_ptr_init(&file_entries);
-  defer vec_char_ptr_delete_and_freeowned(&file_entries);
-
-  while(vec_char_ptr_len(&dirs_to_list) > 0) {
-    char* p;
-    vec_char_ptr_pop(&dirs_to_list, &p);
-
-    listdir_portable(p, &file_entries, &dir_entries);
-
-    for()
-    vec_char_ptr_clear_and_freeowned(&file_entries);
-
+  llrb_char_ptr_fileclaim_iter iter;
+  llrb_char_ptr_fileclaim_iter_begin(&claims, &iter);
+  char_ptr package1;
+  FileClaim claim1;
+  while (llrb_char_ptr_fileclaim_iter_next(&iter, &package1, &claim1)) {
+    if (is_match(indexdata->actual, claim1)) {
+      *matchesother = true;
+      *otherpackage = package1;
+      break;
+    }
   }
   return ERR_OK;
 }
 
-static ErrVal fsops_install_claim(const char *sysroot, const char *path,
-                                  const char *suffix, FileClaim claim,
-                                  size_t zip_index,
-                                  // appends to this
-                                  vec_fsop *fsops) {
+static bool in_protected_paths(vec_char_ptr *protected_paths, char *path) {
+  // TODO: implement this
+  return false;
+}
+
+static char *mkfullpath(const char *sysroot, const char *path,
+                        const char *suffix) {
+  char *fullpath;
+  if (path == NULL) {
+    assert(suffix == NULL);
+    fullpath = strdup(sysroot);
+  } else {
+    asprintf(&fullpath, "%s/%s%s", sysroot, path, suffix);
+  }
+  return fullpath;
+}
+
+static ErrVal fsops_emit_install(const char *sysroot, const char *path,
+                                 const char *suffix, FileClaim claim,
+                                 size_t zip_index,
+                                 // appends to this
+                                 vec_fsop *fsops) {
 
   fsop o = {};
   if (claim.is_directory) {
@@ -609,14 +608,126 @@ static ErrVal fsops_install_claim(const char *sysroot, const char *path,
   return ERR_OK;
 }
 
-static ErrVal fsops_mv(const char *sysroot, const char *frompath,
-                       const char *fromsuffix, const char *topath,
-                       const char *tosuffix, vec_fsop *fsops) {
+static ErrVal fsops_emit_rm(const char *sysroot, const char *path,
+                            const char *suffix,
+                            // appends to this
+                            vec_fsop *fsops) {
+  fsop o = {};
+  o.kind = FSOP_REMOVEFILE;
+  o.removefile.path = mkfullpath(sysroot, path, suffix);
+  vec_fsop_push(fsops, &o);
+  return ERR_OK;
+}
+
+static ErrVal fsops_emit_rmdir(const char *sysroot, const char *path,
+                               const char *suffix,
+                               // appends to this
+                               vec_fsop *fsops) {
+  fsop o = {};
+  o.kind = FSOP_RMDIR;
+  o.rmdir.path = mkfullpath(sysroot, path, suffix);
+  vec_fsop_push(fsops, &o);
+  return ERR_OK;
+}
+
+static ErrVal fsops_emit_mv(const char *sysroot, const char *frompath,
+                            const char *fromsuffix, const char *topath,
+                            const char *tosuffix, vec_fsop *fsops) {
   fsop o = {.kind = FSOP_RENAME,
             .rename = {.from = mkfullpath(sysroot, frompath, fromsuffix),
                        .to = mkfullpath(sysroot, topath, tosuffix)}};
   vec_fsop_push(fsops, &o);
   return ERR_OK;
+}
+
+// rm -rf on the path
+// needed for when there is something blocking the way on our installation, and
+// it's not a protected path
+// doesn't log errors if it's not actually a directory. Only logs errors if we
+// fail to read a file
+static ErrVal fsops_emit_rm_rf(const char *sysroot, const char *path,
+                               const char *suffix,
+                               // for logging. null to omit
+                               const char *op, const char *pkg,
+                               // appends to this
+                               vec_fsop *fsops
+
+) {
+  char *fullpath = mkfullpath(sysroot, path, suffix);
+
+  vec_char_ptr dirs_to_visit;
+  vec_char_ptr_init(&dirs_to_visit);
+  vec_char_ptr_push(&dirs_to_visit, &fullpath);
+  defer vec_char_ptr_delete_and_freeowned(&dirs_to_visit);
+
+  vec_char_ptr dirs_visited;
+  vec_char_ptr_init(&dirs_visited);
+  defer vec_char_ptr_delete_and_freeowned(&dirs_visited);
+
+  vec_char_ptr dir_entries;
+  vec_char_ptr_init(&dir_entries);
+  defer vec_char_ptr_delete_and_freeowned(&dir_entries);
+
+  vec_char_ptr file_entries;
+  vec_char_ptr_init(&file_entries);
+  defer vec_char_ptr_delete_and_freeowned(&file_entries);
+
+  while (vec_char_ptr_len(&dirs_to_visit) > 0) {
+    char *p;
+    vec_char_ptr_pop(&dirs_to_visit, &p);
+    vec_char_ptr_push(&dirs_visited, &p);
+
+    if (listdir_portable(p, &file_entries, &dir_entries) != 0) {
+      LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "%s %s: unable to list files in %s: %s",
+                     op, pkg, p, strerror(errno));
+      return ERR_NOSUCHFILE;
+    }
+
+    // delete mere files
+    for (size_t i = 0; i < vec_char_ptr_len(&file_entries); i++) {
+      char *entry = *vec_char_ptr_at(&file_entries, i);
+      fsops_emit_rm(p, entry, "", fsops);
+    }
+    vec_char_ptr_clear_and_freeowned(&file_entries);
+
+    // recurse into subfolders
+    for (size_t i = 0; i < vec_char_ptr_len(&dir_entries); i++) {
+      char *entry = *vec_char_ptr_at(&dir_entries, i);
+      char *subdir;
+      asprintf(&subdir, "%s/%s", p, entry);
+      vec_char_ptr_push(&dirs_to_visit, &subdir);
+    }
+    vec_char_ptr_clear_and_freeowned(&file_entries);
+  }
+
+  // now delete the seen dirs in reverse order
+  for (size_t i_r = vec_char_ptr_len(&dirs_visited); i_r > 0; i_r--) {
+    size_t i = i_r - 1;
+    fsops_emit_rmdir(*vec_char_ptr_at(&dirs_visited, i), NULL, NULL, fsops);
+  }
+  return ERR_OK;
+}
+// always mallocs
+// note that only one diversion may be applied per path. This is fine for
+// .zpknew
+static char *maybe_divert_path(const char *path,
+                               vec_char_ptr *src_diverted_prefixes,
+                               vec_char_ptr *dest_diverted_prefixes) {
+  size_t diversions_len = vec_char_ptr_len(src_diverted_prefixes);
+  assert(vec_char_ptr_len(dest_diverted_prefixes) == diversions_len);
+  for (size_t i = 0; i < diversions_len; i++) {
+    char *src_prefix = *vec_char_ptr_at(src_diverted_prefixes, i);
+    char *dest_prefix = *vec_char_ptr_at(dest_diverted_prefixes, i);
+
+    size_t prefix_strlen = strlen(src_prefix);
+    if (strncmp(path, src_prefix, prefix_strlen) == 0 &&
+        (path[prefix_strlen] == '/' || path[prefix_strlen] == '\0')) {
+      char *out;
+      asprintf(&out, "%s%s", dest_prefix, path + prefix_strlen);
+      return out;
+    }
+  }
+  return strdup(path);
 }
 
 ErrVal install_package(
@@ -652,15 +763,32 @@ ErrVal install_package(
   size_t zip_index = vec_mz_zip_archive_len(zips);
 
   vec_fsop pkfsops;
+  vec_fsop_init(&pkfsops);
   defer vec_fsop_delete_and_freeowned(&pkfsops);
 
+  // set this to true if we reach a package-fatal error that means it shouldn't
+  // be installed we want to surface all errors though rather than just the
+  // first one
   bool should_not_install = false;
+
+  // in protected directories, we may need to install to $FILE.zpknew
+  // recursively. This helps with that
+  vec_char_ptr src_diverted_prefixes;
+  vec_char_ptr_init(&src_diverted_prefixes);
+  defer vec_char_ptr_delete_and_freeowned(&src_diverted_prefixes);
+  vec_char_ptr dest_diverted_prefixes;
+  vec_char_ptr_init(&dest_diverted_prefixes);
+  defer vec_char_ptr_delete_and_freeowned(&dest_diverted_prefixes);
 
   llrb_char_ptr_fileclaim_iter iter;
   llrb_char_ptr_fileclaim_iter_begin(&claims, &iter);
-  char_ptr path;
+  char_ptr raw_path;
   FileClaim claim;
-  while (llrb_char_ptr_fileclaim_iter_next(&iter, &path, &claim)) {
+  while (llrb_char_ptr_fileclaim_iter_next(&iter, &raw_path, &claim)) {
+    char *path = maybe_divert_path(raw_path, &src_diverted_prefixes,
+                                   &dest_diverted_prefixes);
+    defer free(path);
+
     bool exists;
     bool matchesus;
     bool matchesother;
@@ -679,28 +807,36 @@ ErrVal install_package(
         should_not_install = true;
       } else {
         if (in_protected_paths(protected_paths, path)) {
-          if(fsops_rm_rf(sysroot, path, ".zpknew", "install", package, &pkfsops) != ERR_OK) {
+          if (fsops_emit_rm_rf(sysroot, path, ".zpknew", "install", package,
+                               &pkfsops) != ERR_OK) {
             should_not_install = true;
             continue;
           }
-          fsops_install_claim(sysroot, path, ".zpknew", claim, zip_index,
-                              &pkfsops);
+          fsops_emit_install(sysroot, path, ".zpknew", claim, zip_index,
+                             &pkfsops);
+
+          // emit diversion for future files
+          char *src = strdup(path);
+          char *dest;
+          asprintf(&dest, "%s%s", path, ".zpknew");
+          vec_char_ptr_push(&src_diverted_prefixes, &src);
+          vec_char_ptr_push(&dest_diverted_prefixes, &dest);
         } else {
-          if(fsops_rm_rf(sysroot, path, ".zpksave", &pkfsops) != ERR_OK) {
+          if (fsops_emit_rm_rf(sysroot, path, ".zpksave", "install", package,
+                               &pkfsops) != ERR_OK) {
             should_not_install = true;
             continue;
           }
-          fsops_mv(sysroot, path, "", path, ".zpksave", &pkfsops);
-          fsops_install_claim(sysroot, path, "", claim, zip_index, &pkfsops);
+          fsops_emit_mv(sysroot, path, "", path, ".zpksave", &pkfsops);
+          fsops_emit_install(sysroot, path, "", claim, zip_index, &pkfsops);
         }
       }
     } else {
-      fsops_install_claim(sysroot, path, "", claim, zip_index, &pkfsops);
+      fsops_emit_install(sysroot, path, "", claim, zip_index, &pkfsops);
     }
   }
 
   if (should_not_install) {
-    mz_zip_reader_end(&zip);
     return ERR_UNSAFE;
   }
 
@@ -729,190 +865,177 @@ ErrVal uninstall_package(
     // protected paths
     vec_char_ptr *protected_paths) {
 
-  llrb_char_ptr_fileclaim claims;
-  {
-    mz_zip_archive zip;
-    mz_zip_zero_struct(&zip);
-    if (!mz_zip_reader_init_file(&zip, package_path, 0)) {
-      LOG_ERROR_ARGS(ERR_LEVEL_ERROR,
-                     "install %s: could not open zip archive %s: %s", package,
-                     package_path,
-                     mz_zip_get_error_string(mz_zip_get_last_error(&zip)));
-      return ERR_UNKNOWN;
-    }
-    collect_file_claims(&zip, "install", package, &claims);
-    mz_zip_reader_end(&zip);
+  mz_zip_archive zip;
+  mz_zip_zero_struct(&zip);
+  if (!mz_zip_reader_init_file(&zip, package_path, 0)) {
+    LOG_ERROR_ARGS(ERR_LEVEL_ERROR,
+                   "install %s: could not open zip archive %s: %s", package,
+                   package_path,
+                   mz_zip_get_error_string(mz_zip_get_last_error(&zip)));
+    return ERR_UNKNOWN;
   }
+  llrb_char_ptr_fileclaim claims;
+  collect_file_claims(&zip, "install", package, &claims);
+  defer delete_file_claims(&claims);
+  mz_zip_reader_end(&zip);
 
   // remove claims from index
   remove_claims_from_index(index, package, &claims);
 
-  vec_fsop pkfsops;
-  defer vec_fsop_delete_and_freeowned(&pkfsops);
-
-  vec_mz_zip_archive pkzips;
-  defer vec_mz_zip_archive_delete_and_freeowned(&pkzips);
+  // we can't iterate over the llrb in reverse (which we need to do since we
+  // remove child files before parent files) ergo we iterate and store paths in
+  // a vec
 
   llrb_char_ptr_fileclaim_iter iter;
   llrb_char_ptr_fileclaim_iter_begin(&claims, &iter);
   char_ptr path;
   FileClaim claim;
   while (llrb_char_ptr_fileclaim_iter_next(&iter, &path, &claim)) {
+  }
 
-    // remove in reverse sorted order so every child is deleted before the
-    // parent we also ignore where other packages have claims
+  vec_fsop pkfsops;
+  vec_fsop_init(&pkfsops);
+  defer vec_fsop_delete_and_freeowned(&pkfsops);
 
-    vec_fsop fsops_backward;
-    vec_fsop_init_cap(&fsops_backward, claims.len);
-    defer vec_char_ptr_delete(&paths);
-    llrb_char_ptr_fileclaim_iter iter;
-    llrb_char_ptr_fileclaim_iter_begin(&claims, &iter);
-    char_ptr path;
-    FileClaim claim;
-    while (llrb_char_ptr_fileclaim_iter_next(&iter, &path, &claim)) {
+  // set this to true if we reach a package-fatal error that means it shouldn't
+  // be removed we want to surface all errors though rather than just the
+  // first one
+  bool should_not_proceed = false;
 
-      IndexData *indexdata;
-      bool indexdata_found =
-          llrb_path_indexdata_get_ref(index, &path, &indexdata);
-      // something has gone wrong if we didn't find it.
-      // this is because the package we are uninstalling must have been
-      // installed. we didn't ask the indexing to skip itself, so it has gotta
-      // be in there.
-      assert(indexdata_found);
+  {
 
-      // similarly, we must ensure that this claim is actually in the filetree
-      // (in order to have the next thing make sense)
-      FileClaim thisclaim;
-      bool thisclaim_found =
-          llrb_char_ptr_fileclaim_get(&indexdata->claims, &package, &thisclaim);
-      assert(thisclaim_found);
+    bool exists;
+    bool matchesus;
+    bool matchesother;
+    char *otherpackage = NULL;
+    compute_match_status(index, claims, package, sysroot, path, claim, &exists,
+                         &matchesus, &matchesother, &otherpackage);
 
-      // if there is > 1 claim omit from deletion
-      if (indexdata->claims.len > 1) {
-        continue;
+    if (exists) {
+      if (matchesus) {
+        if (matchesother) {
+          // if it matches some other package too, we do nothing
+          // it'll get removed when the last owning package is removed
+        } else {
+          // if it matches us and doesn't match other, it belongs to us and we
+          // remove it
+          if (claim.is_directory) {
+            fsops_emit_rmdir(sysroot, path, "", &pkfsops);
+          } else {
+            fsops_emit_rm(sysroot, path, "", &pkfsops);
+          }
+        }
+      } else if (matchesother) {
+        LOG_ERROR_ARGS(ERR_LEVEL_WARN,
+                       "uninstall %s: file %s seems to match %s instead of "
+                       "this package. Leaving in place.",
+                       package, path, otherpackage);
+      } else {
+        LOG_ERROR_ARGS(ERR_LEVEL_WARN,
+                       "uninstall %s: file %s does not match any package. "
+                       "Leaving in place.",
+                       package, path);
       }
-
-      // TODO: compare crc32 of actual file and omit if different than what it
-      // was supposed to be
-
-      vec_char_ptr_push(&paths, &path);
+    } else {
+      LOG_ERROR_ARGS(ERR_LEVEL_WARN, "uninstall %s: file %s is already missing",
+                     package, path);
     }
+  }
 
-    for (size_t i_r = vec_char_ptr_len(&paths); i_r > 0; i_r--) {
-      size_t i = i_r - 1;
-      path = *vec_char_ptr_at(&paths, i);
-      bool found_fileclaim =
-          llrb_char_ptr_fileclaim_get(&claims, &path, &claim);
-      assert(found_fileclaim);
+  if (should_not_proceed) {
+    return ERR_UNSAFE;
+  }
 
-      char *target = malloc(strlen(sysroot) + 1 + strlen(path) + 1);
-      defer free(target);
-      sprintf(target, "%s/%s", sysroot, path);
+  // if all good transfer ownership of newly created pkgs
+  vec_fsop_append(fsops, &pkfsops);
+  vec_fsop_clear(&pkfsops);
+}
 
-      LOG_ERROR_ARGS(ERR_LEVEL_INFO, "uninstall %s: removing %s (at %s)",
-                     package, path, target);
-      if (!dry_run) {
-        if (claim.is_directory) {
+ErrVal resolve_package_paths(vec_char_ptr *package_paths,
+                             const vec_char_ptr *repositories,
+                             const vec_char_ptr *packages) {
+  size_t n_targets = vec_char_ptr_len(packages);
 
-        } else if (remove(target) != 0) {
-          LOG_ERROR_ARGS(ERR_LEVEL_ERROR,
-                         "uninstall %s: could not remove file %s (at %s): %s",
-                         package, path, target, strerror(errno));
+  // fetch a list of the packages in the repositories
+  size_t n_repositories = vec_char_ptr_len(repositories);
+
+  vec_char_ptr *entries =
+      (vec_char_ptr *)malloc(sizeof(vec_char_ptr) * n_repositories);
+  for (size_t i = 0; i < n_repositories; i++) {
+    vec_char_ptr_init(&entries[i]);
+  }
+  defer {
+    for (size_t i = 0; i < n_repositories; i++) {
+      vec_char_ptr_delete_and_freeowned(&entries[i]);
+    }
+    free(entries);
+  }
+
+  for (size_t i = 0; i < n_repositories; i++) {
+    char *repository = *vec_char_ptr_at(repositories, i);
+    LOG_ERROR_ARGS(ERR_LEVEL_INFO, "resolve: listing files in %s", repository);
+    if (listdir_portable(repository, &entries[i], NULL) != 0) {
+      LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "resolve: unable to list files in %s: %s",
+                     repository, strerror(errno));
+      return ERR_NOSUCHFILE;
+    }
+  }
+
+  for (size_t i = 0; i < n_targets; i++) {
+    char *package = *vec_char_ptr_at(packages, i);
+    size_t package_strlen = strlen(package);
+
+    char *best_package_entry = NULL;
+    char *best_repository = NULL;
+    apk_blob_t best_package_entry_version = {};
+
+    for (size_t r = 0; r < n_repositories; r++) {
+      char *repository = *vec_char_ptr_at(repositories, r);
+      size_t n_entries = vec_char_ptr_len(&entries[r]);
+      for (size_t e = 0; e < n_entries; e++) {
+        char *entry = *vec_char_ptr_at(&entries[r], e);
+        size_t entry_strlen = strlen(entry);
+        if (!endswith(entry, ".zip")) {
+          continue;
+        }
+        if (!(package_strlen + 1 < entry_strlen &&
+              entry[package_strlen] == '-' &&
+              strncmp(entry, package, package_strlen) == 0)) {
+          continue;
+        }
+        // // pointer to the first char in the .zip suffix
+        char *end = entry + (strlen(entry) - strlen(".zip"));
+        // the char after the hyphen
+        char *vstart = entry + package_strlen + 1;
+        apk_blob_t candidate_version = APK_BLOB_PTR_LEN(vstart, end - vstart);
+
+        if (!apk_version_validate(candidate_version)) {
+          continue;
+        }
+
+        if (best_package_entry == NULL ||
+            apk_version_compare(candidate_version,
+                                best_package_entry_version) ==
+                APK_VERSION_GREATER) {
+          best_package_entry = entry;
+          best_repository = repository;
+          best_package_entry_version = candidate_version;
         }
       }
     }
 
-    return ERR_OK;
+    if (best_package_entry == NULL) {
+      LOG_ERROR_ARGS(
+          ERR_LEVEL_ERROR,
+          "resolve: did not find validly named package %s in any repository",
+          package);
+      return ERR_NOSUCHFILE;
+    }
+
+    char *package_path;
+    asprintf(&package_path, "%s/%s", best_repository, best_package_entry);
+    vec_char_ptr_push(package_paths, &package_path);
   }
 
-  ErrVal resolve_package_paths(vec_char_ptr * package_paths,
-                               const vec_char_ptr *repositories,
-                               const vec_char_ptr *packages) {
-    size_t n_targets = vec_char_ptr_len(packages);
-
-    // fetch a list of the packages in the repositories
-    size_t n_repositories = vec_char_ptr_len(repositories);
-
-    vec_char_ptr *entries =
-        (vec_char_ptr *)malloc(sizeof(vec_char_ptr) * n_repositories);
-    for (size_t i = 0; i < n_repositories; i++) {
-      vec_char_ptr_init(&entries[i]);
-    }
-    defer {
-      for (size_t i = 0; i < n_repositories; i++) {
-        vec_char_ptr_delete_and_freeowned(&entries[i]);
-      }
-      free(entries);
-    }
-
-    for (size_t i = 0; i < n_repositories; i++) {
-      char *repository = *vec_char_ptr_at(repositories, i);
-      LOG_ERROR_ARGS(ERR_LEVEL_INFO, "resolve: listing files in %s",
-                     repository);
-      if (listdir_portable(repository, &entries[i], NULL) != 0) {
-        LOG_ERROR_ARGS(ERR_LEVEL_ERROR,
-                       "resolve: unable to list files in %s: %s", repository,
-                       strerror(errno));
-        return ERR_NOSUCHFILE;
-      }
-    }
-
-    for (size_t i = 0; i < n_targets; i++) {
-      char *package = *vec_char_ptr_at(packages, i);
-      size_t package_strlen = strlen(package);
-
-      char *best_package_entry = NULL;
-      char *best_repository = NULL;
-      apk_blob_t best_package_entry_version = {};
-
-      for (size_t r = 0; r < n_repositories; r++) {
-        char *repository = *vec_char_ptr_at(repositories, r);
-        size_t n_entries = vec_char_ptr_len(&entries[r]);
-        for (size_t e = 0; e < n_entries; e++) {
-          char *entry = *vec_char_ptr_at(&entries[r], e);
-          size_t entry_strlen = strlen(entry);
-          if (!endswith(entry, ".zip")) {
-            continue;
-          }
-          if (!(package_strlen + 1 < entry_strlen &&
-                entry[package_strlen] == '-' &&
-                strncmp(entry, package, package_strlen) == 0)) {
-            continue;
-          }
-          // // pointer to the first char in the .zip suffix
-          char *end = entry + (strlen(entry) - strlen(".zip"));
-          // the char after the hyphen
-          char *vstart = entry + package_strlen + 1;
-          apk_blob_t candidate_version = APK_BLOB_PTR_LEN(vstart, end - vstart);
-
-          if (!apk_version_validate(candidate_version)) {
-            continue;
-          }
-
-          if (best_package_entry == NULL ||
-              apk_version_compare(candidate_version,
-                                  best_package_entry_version) ==
-                  APK_VERSION_GREATER) {
-            best_package_entry = entry;
-            best_repository = repository;
-            best_package_entry_version = candidate_version;
-          }
-        }
-      }
-
-      if (best_package_entry == NULL) {
-        LOG_ERROR_ARGS(
-            ERR_LEVEL_ERROR,
-            "resolve: did not find validly named package %s in any repository",
-            package);
-        return ERR_NOSUCHFILE;
-      }
-
-      char *package_path =
-          malloc(strlen(best_repository) + 1 + strlen(best_package_entry) + 1);
-      sprintf(package_path, "%s/%s", best_repository, best_package_entry);
-      vec_char_ptr_push(package_paths, &package_path);
-    }
-
-    return ERR_OK;
-  }
+  return ERR_OK;
+}
