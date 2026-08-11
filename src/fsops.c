@@ -833,6 +833,11 @@ ErrVal install_package(
             should_not_install = true;
             continue;
           }
+          LOG_ERROR_ARGS(
+              ERR_LEVEL_WARN,
+              "install %s: installing new %s as %s.zpknew (no match + "
+              "in protected path)",
+              package, path, path);
           fsops_emit_install("install", package, sysroot, path, ".zpknew",
                              claim, pZip, &pkfsops);
 
@@ -843,6 +848,11 @@ ErrVal install_package(
           vec_char_ptr_push(&src_diverted_prefixes, &src);
           vec_char_ptr_push(&dest_diverted_prefixes, &dest);
         } else {
+          LOG_ERROR_ARGS(
+              ERR_LEVEL_WARN,
+              "install %s: renaming old %s to %s.zpksave (no match + "
+              "not in protected path)",
+              package, path, path);
           if (fsops_emit_rm_rf("install", package, sysroot, path, ".zpksave",
                                &pkfsops) != ERR_OK) {
             should_not_install = true;
@@ -908,8 +918,9 @@ ErrVal uninstall_package(
   mz_zip_reader_end(pZip);
   free(pZip);
 
-  // remove claims from index. Must use 
-  // Bug: use zip name instead bc version conflict can happen here. Also in general 
+  // remove claims from index. Must use
+  // Bug: use zip name instead bc version conflict can happen here. Also in
+  // general
   remove_claims_from_index(index, package, &claims);
 
   vec_fsop_t pkfsops;

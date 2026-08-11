@@ -58,10 +58,18 @@ static int do_add(ZpkConfiguration *pConf, vec_char_ptr *packages,
   vec_mz_zip_archive_ptr_init(&zips);
   defer vec_mz_zip_archive_ptr_delete_and_freeowned(&zips);
 
+  bool should_proceed = true;
   for (size_t i = 0; i < n_targets; i++) {
-    install_package(&fsops, &zips, &index, *vec_char_ptr_at(packages, i),
-                    *vec_char_ptr_at(&package_paths, i), pConf->sysroot,
-                    &pConf->protected_paths);
+    ErrVal err =
+        install_package(&fsops, &zips, &index, *vec_char_ptr_at(packages, i),
+                        *vec_char_ptr_at(&package_paths, i), pConf->sysroot,
+                        &pConf->protected_paths);
+    if (err != ERR_OK) {
+      should_proceed = false;
+    }
+  }
+  if (!should_proceed) {
+    return 1;
   }
 
   execute_fsops(&fsops, dry_run);
@@ -108,10 +116,19 @@ static int do_del(ZpkConfiguration *pConf, vec_char_ptr *packages,
   vec_mz_zip_archive_ptr_init(&zips);
   defer vec_mz_zip_archive_ptr_delete_and_freeowned(&zips);
 
+  bool should_proceed = true;
+
   for (size_t i = 0; i < n_targets; i++) {
-    uninstall_package(&fsops, &zips, &index, *vec_char_ptr_at(packages, i),
-                      *vec_char_ptr_at(&package_paths, i), pConf->sysroot,
-                      &pConf->protected_paths);
+    ErrVal err =
+        uninstall_package(&fsops, &zips, &index, *vec_char_ptr_at(packages, i),
+                          *vec_char_ptr_at(&package_paths, i), pConf->sysroot,
+                          &pConf->protected_paths);
+    if (err != ERR_OK) {
+      should_proceed = false;
+    }
+  }
+  if (!should_proceed) {
+    return 1;
   }
 
   execute_fsops(&fsops, dry_run);
