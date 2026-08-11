@@ -42,6 +42,7 @@ $(BUILD_DIR)/%.c.o: %.c
 clean:
 	$(RM) -r $(BUILD_DIR)
 
+DEPS := $(OBJS:.o=.d)
 
 -include $(DEPS)
 

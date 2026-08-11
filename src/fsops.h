@@ -4,8 +4,8 @@
 #include "error.h"
 #include "instances/llrb_path_indexdata.h"
 #include "instances/vec_char_ptr.h"
-#include "instances/vec_fsop.h"
-#include "instances/vec_mz_zip_archive.h"
+#include "instances/vec_fsop_t.h"
+#include "instances/vec_mz_zip_archive_ptr.h"
 
 // file index manipulation ops
 void build_file_index(llrb_path_indexdata *index, char *pkgs_path);
@@ -18,10 +18,10 @@ ErrVal resolve_package_paths(vec_char_ptr *package_paths,
 
 ErrVal install_package(
     // appends to this if the operation would succeed
-    vec_fsop *fsops,
+    vec_fsop_t *fsops,
     // fsops refer to indexes in the zips. appends to this if the operation
     // would succeed
-    vec_mz_zip_archive *zips,
+    vec_mz_zip_archive_ptr *zips,
     // file index (for file conflict identification)
     llrb_path_indexdata *index,
     // user given package name (For logging)
@@ -35,10 +35,10 @@ ErrVal install_package(
 
 ErrVal uninstall_package(
     // appends to this if the operation would succeed
-    vec_fsop *fsops,
+    vec_fsop_t *fsops,
     // fsops refer to indexes in the zips. appends to this if the operation
     // would succeed
-    vec_mz_zip_archive *zips,
+    vec_mz_zip_archive_ptr *zips,
     // file index (for file conflict identification)
     llrb_path_indexdata *index,
     // user given package name (For logging)
@@ -52,11 +52,8 @@ ErrVal uninstall_package(
 
 void execute_fsops(
     // executes these
-    vec_fsop *fsops,
-    // fsops refer to indexes in the zips
-    vec_mz_zip_archive *zips,
-    // for logging
-    const char *op, const char *pkg,
+    vec_fsop_t *fsops,
     // don't actually change fs
     const bool dry_run);
+    
 #endif // fsops_h_INCLUDED

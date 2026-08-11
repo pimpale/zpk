@@ -60,7 +60,8 @@ struct LLRB_T {
 };
 
 // Iterators are allocation-free. Mutating the tree invalidates all active
-// iterators; otherwise each call advances in ascending key order.
+// iterators; otherwise each _iter_next call advances in ascending key order
+// and each _iter_prev call in descending key order.
 typedef struct LLRB_ITER_T {
   const LLRB_NODE_T *node;
 } LLRB_ITER_T;
@@ -98,6 +99,23 @@ bool LLRB_FN(_iter_next_ref)(LLRB_ITER_T *iter, LLRB_KEY *key,
 // bound), so a subsequent _iter_next starts there.
 void LLRB_FN(_iter_lower_bound)(const LLRB_T *tree, const LLRB_KEY *key,
                                 LLRB_ITER_T *iter);
+
+// _iter_begin/_iter_lower_bound seed a forward walk driven by _iter_next;
+// _iter_rbegin/_iter_floor seed a backward walk driven by _iter_prev. An
+// iterator is single-direction: the cursor sits on the *next* node to yield,
+// so mixing _iter_next and _iter_prev on one iterator re-yields or skips
+// around the current position rather than stepping back and forth.
+void LLRB_FN(_iter_rbegin)(const LLRB_T *tree, LLRB_ITER_T *iter);
+bool LLRB_FN(_iter_prev)(LLRB_ITER_T *iter, LLRB_KEY *key,
+                         LLRB_VALUE *value);
+bool LLRB_FN(_iter_prev_ref)(LLRB_ITER_T *iter, LLRB_KEY *key,
+                             const LLRB_VALUE **value);
+
+// Position the iterator at the greatest node with key <= *key, so a
+// subsequent _iter_prev starts there. The descending counterpart to
+// _iter_lower_bound.
+void LLRB_FN(_iter_floor)(const LLRB_T *tree, const LLRB_KEY *key,
+                          LLRB_ITER_T *iter);
 
 // Allocation-free relink pair. _extract removes *key like _remove but
 // hands back the unlinked node instead of freeing it; _insert_node

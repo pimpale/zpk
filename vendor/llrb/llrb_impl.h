@@ -187,6 +187,12 @@ static const LLRB_NODE_T *LLRB_LOCAL(cmin)(const LLRB_NODE_T *h) {
   return h;
 }
 
+static const LLRB_NODE_T *LLRB_LOCAL(cmax)(const LLRB_NODE_T *h) {
+  while (h != NULL && h->right != NULL)
+    h = h->right;
+  return h;
+}
+
 // `keep`, when non-NULL, receives the exact matched node. Node addresses
 // remain stable from insertion until removal: the two-child case splices
 // the successor node into place instead of copying its payload.
@@ -466,6 +472,74 @@ bool LLRB_FN(_iter_next_ref)(LLRB_ITER_T *iter, LLRB_KEY *key,
   } else {
     const LLRB_NODE_T *parent = n->parent;
     while (parent != NULL && n == parent->right) {
+      n = parent;
+      parent = parent->parent;
+    }
+    iter->node = parent;
+  }
+  return true;
+}
+
+void LLRB_FN(_iter_rbegin)(const LLRB_T *tree, LLRB_ITER_T *iter) {
+  iter->node = LLRB_LOCAL(cmax)(tree->root);
+}
+
+void LLRB_FN(_iter_floor)(const LLRB_T *tree, const LLRB_KEY *key,
+                          LLRB_ITER_T *iter) {
+  const LLRB_NODE_T *n = tree->root;
+  const LLRB_NODE_T *best = NULL;
+  while (n != NULL) {
+    int cmp = LLRB_COMPARE(key, &n->key);
+    if (cmp >= 0) {
+      best = n;
+      if (cmp == 0)
+        break;
+      n = n->right;
+    } else {
+      n = n->left;
+    }
+  }
+  iter->node = best;
+}
+
+bool LLRB_FN(_iter_prev)(LLRB_ITER_T *iter, LLRB_KEY *key,
+                         LLRB_VALUE *value) {
+  const LLRB_NODE_T *n = iter->node;
+  if (n == NULL)
+    return false;
+  if (key != NULL)
+    *key = n->key;
+  if (value != NULL)
+    *value = n->value;
+
+  if (n->left != NULL) {
+    iter->node = LLRB_LOCAL(cmax)(n->left);
+  } else {
+    const LLRB_NODE_T *parent = n->parent;
+    while (parent != NULL && n == parent->left) {
+      n = parent;
+      parent = parent->parent;
+    }
+    iter->node = parent;
+  }
+  return true;
+}
+
+bool LLRB_FN(_iter_prev_ref)(LLRB_ITER_T *iter, LLRB_KEY *key,
+                             const LLRB_VALUE **value) {
+  const LLRB_NODE_T *n = iter->node;
+  if (n == NULL)
+    return false;
+  if (key != NULL)
+    *key = n->key;
+  if (value != NULL)
+    *value = &n->value;
+
+  if (n->left != NULL) {
+    iter->node = LLRB_LOCAL(cmax)(n->left);
+  } else {
+    const LLRB_NODE_T *parent = n->parent;
+    while (parent != NULL && n == parent->left) {
       n = parent;
       parent = parent->parent;
     }

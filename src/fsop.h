@@ -14,6 +14,10 @@ typedef enum {
 
 typedef struct {
   fsop_kind_t kind;
+  // not owned by delete_fsop
+  const char* op;
+  // needs to be owned. lifetime can be uncertain.
+  char* pkg;
   union {
     struct {
       char *from;
@@ -21,7 +25,8 @@ typedef struct {
     } rename;
     struct {
       char *path;
-      size_t zip_index;
+      // not owned!
+      mz_zip_archive* zip;
       uint32_t file_index;
     } createfile;
     struct {
@@ -34,8 +39,8 @@ typedef struct {
       char *path;
     } rmdir;
   };
-} fsop;
+} fsop_t;
 
-void delete_fsop(fsop *o);
+void delete_fsop(fsop_t *o);
 
 #endif // fsop_h_INCLUDED

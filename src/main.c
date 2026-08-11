@@ -6,6 +6,9 @@
 #include "asprintf/asprintf.h"
 #include "configuration.h"
 #include "fsops.h"
+#include "instances/vec_char_ptr.h"
+#include "instances/vec_fsop_t.h"
+#include "instances/vec_mz_zip_archive_ptr.h"
 
 static int do_fetch(ZpkConfiguration *pConf, vec_char_ptr *pTargets,
                     char *path) {
@@ -46,11 +49,22 @@ static int do_add(ZpkConfiguration *pConf, vec_char_ptr *packages,
   build_file_index(&index, pConf->pkgs_path);
   defer delete_file_index(&index);
 
+  // create the fsops vec and the zips vec
+  vec_fsop_t fsops;
+  vec_fsop_t_init(&fsops);
+  defer vec_fsop_t_delete_and_freeowned(&fsops);
+
+  vec_mz_zip_archive_ptr zips;
+  vec_mz_zip_archive_ptr_init(&zips);
+  defer vec_mz_zip_archive_ptr_delete_and_freeowned(&zips);
+
   for (size_t i = 0; i < n_targets; i++) {
-    install_package(&index, *vec_char_ptr_at(packages, i),
+    install_package(&fsops, &zips, &index, *vec_char_ptr_at(packages, i),
                     *vec_char_ptr_at(&package_paths, i), pConf->sysroot,
-                    dry_run);
+                    &pConf->protected_paths);
   }
+
+  execute_fsops(&fsops, dry_run);
   return 0;
 }
 
@@ -85,11 +99,22 @@ static int do_del(ZpkConfiguration *pConf, vec_char_ptr *packages,
   build_file_index(&index, pConf->pkgs_path);
   defer delete_file_index(&index);
 
+  // create the fsops vec and the zips vec
+  vec_fsop_t fsops;
+  vec_fsop_t_init(&fsops);
+  defer vec_fsop_t_delete_and_freeowned(&fsops);
+
+  vec_mz_zip_archive_ptr zips;
+  vec_mz_zip_archive_ptr_init(&zips);
+  defer vec_mz_zip_archive_ptr_delete_and_freeowned(&zips);
+
   for (size_t i = 0; i < n_targets; i++) {
-    uninstall_package(&index, *vec_char_ptr_at(packages, i),
+    uninstall_package(&fsops, &zips, &index, *vec_char_ptr_at(packages, i),
                       *vec_char_ptr_at(&package_paths, i), pConf->sysroot,
-                      dry_run);
+                      &pConf->protected_paths);
   }
+
+  execute_fsops(&fsops, dry_run);
   return 0;
 }
 
