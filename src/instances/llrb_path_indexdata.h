@@ -14,7 +14,7 @@ typedef struct {
 typedef struct {
   bool computed_actual;
   FileStatus actual;
-  // Map<PackageName, FileClaim>
+  // Map<PackagePath, FileClaim>
   llrb_char_ptr_fileclaim claims;
 } IndexData;
 

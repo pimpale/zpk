@@ -6,6 +6,7 @@
 
 typedef enum {
   FSOP_RENAME,
+  FSOP_COPY,
   FSOP_CREATEFILE,
   FSOP_REMOVEFILE,
   FSOP_MKDIR,
@@ -15,18 +16,22 @@ typedef enum {
 typedef struct {
   fsop_kind_t kind;
   // not owned by delete_fsop
-  const char* op;
+  const char *op;
   // needs to be owned. lifetime can be uncertain.
-  char* pkg;
+  char *pkg;
   union {
     struct {
       char *from;
       char *to;
     } rename;
     struct {
+      char *from;
+      char *to;
+    } copy;
+    struct {
       char *path;
       // not owned!
-      mz_zip_archive* zip;
+      mz_zip_archive *zip;
       uint32_t file_index;
     } createfile;
     struct {

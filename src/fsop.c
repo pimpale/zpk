@@ -8,6 +8,10 @@ void delete_fsop(fsop_t *o) {
     free(o->rename.from);
     free(o->rename.to);
     break;
+  case FSOP_COPY:
+    free(o->copy.from);
+    free(o->copy.to);
+    break;
   case FSOP_CREATEFILE:
     free(o->createfile.path);
     break;

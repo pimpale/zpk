@@ -78,7 +78,12 @@ void LLRB_FN(_clear)(LLRB_T *tree);
 // until that entry is removed.
 LLRB_VALUE *LLRB_FN(_insert)(LLRB_T *tree, const LLRB_KEY *key,
                              const LLRB_VALUE *value);
-bool LLRB_FN(_remove)(LLRB_T *tree, const LLRB_KEY *key,
+// Removes *key. old_key and old_value each receive the removed entry's copy
+// when non-NULL, and are ignored when NULL; both are left untouched if the
+// key was not found. Nodes store keys and values by copy, so for owning key
+// types (a strdup'd char *, say) old_key is the only way to reclaim the
+// stored key — the node that held it is gone once this returns.
+bool LLRB_FN(_remove)(LLRB_T *tree, const LLRB_KEY *key, LLRB_KEY *old_key,
                       LLRB_VALUE *old_value);
 bool LLRB_FN(_get)(const LLRB_T *tree, const LLRB_KEY *key,
                    LLRB_VALUE *value);

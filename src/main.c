@@ -9,6 +9,7 @@
 #include "instances/vec_char_ptr.h"
 #include "instances/vec_fsop_t.h"
 #include "instances/vec_mz_zip_archive_ptr.h"
+#include "pathutils.h"
 
 static int do_fetch(ZpkConfiguration *pConf, vec_char_ptr *pTargets,
                     char *path) {
@@ -60,13 +61,19 @@ static int do_add(ZpkConfiguration *pConf, vec_char_ptr *packages,
 
   bool should_proceed = true;
   for (size_t i = 0; i < n_targets; i++) {
+    char *package = *vec_char_ptr_at(packages, i);
+    char *package_path = *vec_char_ptr_at(&package_paths, i);
     ErrVal err =
-        install_package(&fsops, &zips, &index, *vec_char_ptr_at(packages, i),
-                        *vec_char_ptr_at(&package_paths, i), pConf->sysroot,
-                        &pConf->protected_paths);
+        fsops_emit_install_package(&fsops, &zips, &index, package, package_path,
+                                   pConf->sysroot, &pConf->protected_paths);
     if (err != ERR_OK) {
       should_proceed = false;
+      continue;
     }
+
+    // if good emit final fsop copying the zip to the install directory
+    fsops_emit_cp("install", package, NULL, package_path, "", pConf->pkgs_path,
+                  basename(package_path), "", &fsops);
   }
   if (!should_proceed) {
     return 1;
@@ -94,7 +101,7 @@ static int do_del(ZpkConfiguration *pConf, vec_char_ptr *packages,
   // no ownership over pkgs path so no freeowned
   defer vec_char_ptr_delete(&installedrepo);
 
-  if (resolve_package_paths(&package_paths, &pConf->repositories, packages) !=
+  if (resolve_package_paths(&package_paths, &installedrepo, packages) !=
       ERR_OK) {
     LOG_ERROR(
         ERR_LEVEL_FATAL,
@@ -119,13 +126,18 @@ static int do_del(ZpkConfiguration *pConf, vec_char_ptr *packages,
   bool should_proceed = true;
 
   for (size_t i = 0; i < n_targets; i++) {
-    ErrVal err =
-        uninstall_package(&fsops, &zips, &index, *vec_char_ptr_at(packages, i),
-                          *vec_char_ptr_at(&package_paths, i), pConf->sysroot,
-                          &pConf->protected_paths);
+    char *package = *vec_char_ptr_at(packages, i);
+    char *package_path = *vec_char_ptr_at(&package_paths, i);
+    ErrVal err = fsops_emit_uninstall_package(&fsops, &zips, &index, package,
+                                              package_path, pConf->sysroot,
+                                              &pConf->protected_paths);
     if (err != ERR_OK) {
       should_proceed = false;
+      continue;
     }
+
+    // if good to proceed emit final fsop removing the zip
+    fsops_emit_rm("uninstall", package, NULL, package_path, "", &fsops);
   }
   if (!should_proceed) {
     return 1;

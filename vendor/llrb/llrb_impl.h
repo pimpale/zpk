@@ -393,9 +393,19 @@ static bool LLRB_LOCAL(remove_root)(LLRB_T *tree, const LLRB_KEY *key,
   return true;
 }
 
-bool LLRB_FN(_remove)(LLRB_T *tree, const LLRB_KEY *key,
+bool LLRB_FN(_remove)(LLRB_T *tree, const LLRB_KEY *key, LLRB_KEY *old_key,
                       LLRB_VALUE *old_value) {
-  return LLRB_LOCAL(remove_root)(tree, key, old_value, NULL);
+  if (old_key == NULL)
+    return LLRB_LOCAL(remove_root)(tree, key, old_value, NULL);
+  // keep the matched node alive just long enough to copy its key out; the
+  // two-child case splices rather than copies payloads, so the node handed
+  // back is always the one that matched
+  LLRB_NODE_T *removed = NULL;
+  if (!LLRB_LOCAL(remove_root)(tree, key, old_value, &removed))
+    return false;
+  *old_key = removed->key;
+  LLRB_NODE_FREE(removed);
+  return true;
 }
 
 bool LLRB_FN(_extract)(LLRB_T *tree, const LLRB_KEY *key,

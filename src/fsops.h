@@ -16,7 +16,33 @@ ErrVal resolve_package_paths(vec_char_ptr *package_paths,
                              const vec_char_ptr *repositories,
                              const vec_char_ptr *packages);
 
-ErrVal install_package(
+void fsops_emit_install(const char *op, const char *pkg, const char *sysroot,
+                        const char *path, const char *suffix, FileClaim claim,
+                        mz_zip_archive *zip,
+                        // appends to this
+                        vec_fsop_t *fsops);
+
+void fsops_emit_rm(const char *op, const char *pkg, const char *sysroot,
+                   const char *path, const char *suffix,
+                   // appends to this
+                   vec_fsop_t *fsops);
+
+void fsops_emit_rmdir(const char *op, const char *pkg, const char *sysroot,
+                      const char *path, const char *suffix,
+                      // appends to this
+                      vec_fsop_t *fsops);
+
+void fsops_emit_mv(const char *op, const char *pkg,
+                   const char *fromsysroot, const char *frompath,
+                   const char *fromsuffix, const char *tosysroot, const char *topath,
+                   const char *tosuffix, vec_fsop_t *fsops);
+
+void fsops_emit_cp(const char *op, const char *pkg,
+                   const char *fromsysroot, const char *frompath,
+                   const char *fromsuffix, const char *tosysroot, const char *topath,
+                   const char *tosuffix, vec_fsop_t *fsops);
+
+ErrVal fsops_emit_install_package(
     // appends to this if the operation would succeed
     vec_fsop_t *fsops,
     // fsops refer to indexes in the zips. appends to this if the operation
@@ -33,7 +59,7 @@ ErrVal install_package(
     // protected paths
     vec_char_ptr *protected_paths);
 
-ErrVal uninstall_package(
+ErrVal fsops_emit_uninstall_package(
     // appends to this if the operation would succeed
     vec_fsop_t *fsops,
     // fsops refer to indexes in the zips. appends to this if the operation
@@ -55,5 +81,5 @@ void execute_fsops(
     vec_fsop_t *fsops,
     // don't actually change fs
     const bool dry_run);
-    
+
 #endif // fsops_h_INCLUDED
