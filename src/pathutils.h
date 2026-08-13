@@ -6,5 +6,7 @@ char *cleanpath(const char *path);
 char *normalize(const char *path);
 const char *basename(const char *path);
 bool endswith(const char *str, const char *suffix);
+char *mkfullpath(const char *sysroot, const char *path,
+                        const char *suffix);
 
 #endif // pathutils_h_INCLUDED

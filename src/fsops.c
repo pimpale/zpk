@@ -8,10 +8,10 @@
 
 #include "apkver/apkver.h"
 #include "asprintf/asprintf.h"
-#include "constants.h"
 #include "error.h"
 #include "fsop.h"
 #include "fsops.h"
+#include "index.h"
 #include "instances/llrb_char_ptr_fileclaim.h"
 #include "instances/llrb_path_indexdata.h"
 #include "instances/vec_char_ptr.h"
@@ -19,414 +19,8 @@
 #include "instances/vec_mz_zip_archive_ptr.h"
 #include "miniz/miniz.h"
 #include "oscompatlayer.h"
+#include "pathutils.h"
 
-// normalize the filename by dropping "." components and empty components
-// (leading, doubled, and trailing slashes). if the filename is bad (has a
-// ".." component, contains a backslash, or normalizes to nothing) then return
-// NULL. caller must free the returned string if it is not NULL
-static char *normalize(const char *filename) {
-  char *out = malloc(strlen(filename) + 1);
-  size_t out_len = 0;
-  // where the current component starts in out; rewinding to this drops the
-  // component without disturbing the separator before it
-  size_t comp_start = 0;
-  enum { CS_START, CS_ONEDOT, CS_TWODOTS, CS_OTHER } state = CS_START;
-  for (const char *p = filename;; p++) {
-    char c = *p;
-    if (c == '\0' || c == '/') {
-      if (state == CS_TWODOTS) {
-        free(out);
-        return NULL;
-      }
-      if (state == CS_START || state == CS_ONEDOT) {
-        // empty or "." component: drop it
-        out_len = comp_start;
-      } else if (c == '/') {
-        out[out_len++] = '/';
-        comp_start = out_len;
-      }
-      state = CS_START;
-      if (c == '\0') {
-        break;
-      }
-    } else if (c == '\\') {
-      // forbid \\ because it might be a path traversal on windows.
-      free(out);
-      return NULL;
-    } else {
-      out[out_len++] = c;
-      if (c == '.') {
-        if (state == CS_START) {
-          state = CS_ONEDOT;
-        } else if (state == CS_ONEDOT) {
-          state = CS_TWODOTS;
-        } else {
-          state = CS_OTHER;
-        }
-      } else {
-        state = CS_OTHER;
-      }
-    }
-  }
-  if (out_len == 0) {
-    free(out);
-    return NULL;
-  }
-  // omit trailing / for normalization purposes
-  if (out[out_len - 1] == '/') {
-    out_len--;
-  }
-  out[out_len] = '\0';
-
-  return out;
-}
-
-static bool endswith(const char *str, const char *suffix) {
-  size_t len = strlen(str);
-  size_t suflen = strlen(suffix);
-  if (suflen > len) {
-    return false;
-  }
-  return strcmp(str + (len - suflen), suffix) == 0;
-}
-
-// returns the last part of the path
-static const char *basename(const char *input) {
-  const char *c = strrchr(input, '/');
-  if (c == NULL) {
-    return NULL;
-  }
-  if (*c == '\0') {
-    return NULL;
-  }
-  return c;
-}
-
-// free a claims tree including its path keys
-static void delete_file_claims(llrb_char_ptr_fileclaim *claims) {
-  llrb_char_ptr_fileclaim_iter iter;
-  llrb_char_ptr_fileclaim_iter_begin(claims, &iter);
-  char_ptr path;
-  FileClaim claim;
-  while (llrb_char_ptr_fileclaim_iter_next(&iter, &path, &claim)) {
-    free(path);
-  }
-  llrb_char_ptr_fileclaim_delete(claims);
-}
-
-// insert one claim, taking ownership of path (freed here when not kept).
-// duplicate directory claims collapse silently (implied parents repeat for
-// every file below them); any duplicate involving a file claim means the zip
-// claims one path as two files or as both file and directory — reject
-static bool insert_file_claim(llrb_char_ptr_fileclaim *claims,
-                              // logging
-                              const char *op, const char *pkg,
-                              // key pair to insert
-                              char *path, const FileClaim *claim) {
-  FileClaim *existing = NULL;
-  if (!llrb_char_ptr_fileclaim_get_ref(claims, &path, &existing)) {
-    // the tree now owns `path`
-    llrb_char_ptr_fileclaim_insert(claims, &path, claim);
-    return true;
-  }
-  bool compatible = existing->is_directory && claim->is_directory;
-  if (!compatible) {
-    LOG_ERROR_ARGS(ERR_LEVEL_ERROR,
-                   "%s %s: within-package conflict: path %s claimed as %s and "
-                   "as %s, skipping duplicate",
-                   op, pkg, path, existing->is_directory ? "directory" : "file",
-                   claim->is_directory ? "directory" : "file");
-  }
-  free(path);
-  return compatible;
-}
-
-// collect all explicit (listed in zip) and implicit (parent directory) claims.
-static void collect_file_claims(mz_zip_archive *zip,
-                                // logging only
-                                const char *op, const char *package,
-                                llrb_char_ptr_fileclaim *claims) {
-  llrb_char_ptr_fileclaim_new(claims);
-  mz_uint num_files = mz_zip_reader_get_num_files(zip);
-COLLECT_ONE_FILE:
-  for (mz_uint i = 0; i < num_files; i++) {
-    mz_zip_archive_file_stat file_stat;
-    if (!mz_zip_reader_file_stat(zip, i, &file_stat)) {
-      LOG_ERROR_ARGS(
-          ERR_LEVEL_ERROR,
-          "%s %s: could not get file stat for file %u in zip: %s, skipping", op,
-          package, i, mz_zip_get_error_string(mz_zip_get_last_error(zip)));
-      continue;
-    }
-
-    mz_uint need = mz_zip_reader_get_filename(zip, i, NULL, 0);
-    char *name = malloc(need);
-    defer free(name);
-    mz_zip_reader_get_filename(zip, i, name, need);
-
-    char *normalized = normalize(name);
-    if (normalized == NULL) {
-      LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "%s %s: invalid filename %s, skipping",
-                     op, package, name);
-      continue;
-    }
-    if (strcmp(normalized, name) != 0) {
-      LOG_ERROR_ARGS(ERR_LEVEL_INFO, "%s %s: normalized filename %s to %s", op,
-                     package, name, normalized);
-    }
-    if (!file_stat.m_is_directory && !file_stat.m_is_supported) {
-      LOG_ERROR_ARGS(ERR_LEVEL_ERROR,
-                     "%s %s: file %s is encrypted or uses an unsupported "
-                     "compression method, skipping",
-                     op, package, normalized);
-      continue;
-    }
-
-    // implied parent directories, outermost first
-    for (char *p = normalized; *p != '\0'; p++) {
-      if (*p != '/') {
-        continue;
-      }
-      *p = '\0';
-      char *parent = strdup(normalized);
-      *p = '/';
-      FileClaim parent_claim = {.is_directory = true};
-      if (!insert_file_claim(claims, op, package, parent, &parent_claim)) {
-        free(normalized);
-        continue COLLECT_ONE_FILE;
-      }
-    }
-
-    FileClaim claim = {
-        .file_index = i,
-        .crc32 = file_stat.m_is_directory ? 0 : file_stat.m_crc32,
-        .is_directory = file_stat.m_is_directory,
-    };
-    insert_file_claim(claims, op, package, normalized, &claim);
-  }
-}
-
-// move every claim into the shared index as `package`'s IndexDataEntry,
-// consuming the tree: each path key is either handed to the index or freed.
-// on return `claims` is empty (but not deleted!)
-static void merge_claims_into_index(llrb_path_indexdata *index,
-                                    const char *package_path,
-                                    llrb_char_ptr_fileclaim *claims,
-                                    bool simulate_installed) {
-  llrb_char_ptr_fileclaim_iter iter;
-  llrb_char_ptr_fileclaim_iter_begin(claims, &iter);
-  char_ptr path;
-  FileClaim claim;
-  while (llrb_char_ptr_fileclaim_iter_next(&iter, &path, &claim)) {
-    IndexData *data = NULL;
-    if (!llrb_path_indexdata_get_ref(index, &path, &data)) {
-      IndexData fresh;
-      llrb_char_ptr_fileclaim_new(&fresh.claims);
-      // the index now owns `path`
-      data = llrb_path_indexdata_insert(index, &path, &fresh);
-    } else {
-      // path already indexed; the index keeps its own key
-      free(path);
-    }
-    if (simulate_installed) {
-      data->computed_actual = true;
-      data->actual.exists = true;
-      data->actual.is_directory = claim.is_directory;
-      data->actual.crc32 = claim.crc32;
-    }
-
-    char *key = strdup(package_path);
-    FileClaim *inserted =
-        llrb_char_ptr_fileclaim_insert(&data->claims, &key, &claim);
-    // duplicate package path should have been caught earlier
-    assert(inserted != NULL);
-  }
-  llrb_char_ptr_fileclaim_clear(claims);
-}
-
-// remove all claims from the index (if they exist). Doesn't error if they're
-// not there.
-static void remove_claims_from_index(llrb_path_indexdata *index,
-                                     char *package_path,
-                                     llrb_char_ptr_fileclaim *claims) {
-  llrb_char_ptr_fileclaim_iter iter;
-  llrb_char_ptr_fileclaim_iter_begin(claims, &iter);
-  char_ptr path;
-  FileClaim claim;
-  while (llrb_char_ptr_fileclaim_iter_next(&iter, &path, &claim)) {
-    IndexData *data = NULL;
-    if (llrb_path_indexdata_get_ref(index, &path, &data)) {
-      char_ptr removed_key = NULL;
-      if (llrb_char_ptr_fileclaim_remove(&data->claims, &package_path,
-                                         &removed_key, NULL)) {
-        free(removed_key);
-        if (data->claims.len == 0 && !data->computed_actual) {
-          char_ptr removed_path = NULL;
-          if (llrb_path_indexdata_remove(index, &path, &removed_path, NULL)) {
-            free(removed_path);
-          }
-        }
-      }
-    }
-  }
-}
-
-// read the central directories of all the files and construct an index of all
-// the files in it
-// only_installed (mandatory for now) only builds the index with installed files
-// (useful for ownership tests)
-void build_file_index(llrb_path_indexdata *index, char *pkgs_path) {
-  llrb_path_indexdata_new(index);
-  // first list files in the pkgs path:
-  vec_char_ptr entries;
-  vec_char_ptr_init(&entries);
-  defer vec_char_ptr_delete_and_freeowned(&entries);
-
-  if (listdir_portable(pkgs_path, &entries, NULL) != 0) {
-    LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "index: unable to list files in %s: %s",
-                   pkgs_path, strerror(errno));
-    return;
-  }
-
-  for (size_t i = 0; i < vec_char_ptr_len(&entries); i++) {
-    char *entry = *vec_char_ptr_at(&entries, i);
-    if (!endswith(entry, ".zip")) {
-      continue;
-    }
-    char *package_path;
-    asprintf(&package_path, "%s/%s", pkgs_path, entry);
-    defer free(package_path);
-
-    mz_zip_archive zip;
-    mz_zip_zero_struct(&zip);
-    defer mz_zip_reader_end(&zip);
-    if (!mz_zip_reader_init_file(&zip, package_path, 0)) {
-      LOG_ERROR_ARGS(ERR_LEVEL_ERROR,
-                     "index %s: could not open zip archive: %s", package_path,
-                     mz_zip_get_error_string(mz_zip_get_last_error(&zip)));
-      continue;
-    }
-
-    llrb_char_ptr_fileclaim claims;
-    collect_file_claims(&zip, "index", package_path, &claims);
-    merge_claims_into_index(index, package_path, &claims, false);
-    delete_file_claims(&claims);
-  }
-}
-
-// computes the whole-file crc32 into *out. op/pkg are only for log context and
-// may be NULL to log without it
-static ErrVal file_crc32(const char *path, uint32_t *out, const char *op,
-                         const char *pkg) {
-  FILE *f = fopen(path, "rb");
-  if (f == NULL) {
-    if (op != NULL && pkg != NULL) {
-      LOG_ERROR_ARGS(ERR_LEVEL_ERROR,
-                     "%s %s: could not open file %s to compute hash: %s", op,
-                     pkg, path, strerror(errno));
-    }
-    return ERR_NOSUCHFILE;
-  }
-  defer fclose(f);
-
-  mz_ulong crc = MZ_CRC32_INIT;
-  unsigned char buf[64 * 1024];
-  size_t n;
-  while ((n = fread(buf, 1, sizeof buf, f)) > 0)
-    crc = mz_crc32(crc, buf, n);
-  if (ferror(f) != 0) {
-    if (op != NULL && pkg != NULL) {
-      LOG_ERROR_ARGS(ERR_LEVEL_ERROR,
-                     "%s %s: read error while computing hash of %s", op, pkg,
-                     path);
-    }
-    return ERR_NOSUCHFILE;
-  }
-  *out = (uint32_t)crc;
-  return ERR_OK;
-}
-
-// pass op and pkg to enable logging
-// creates an empty llrb leaf if needed
-// returns Indexdata pointer on success, NULL on failure
-static IndexData *ensure_actual(llrb_path_indexdata *index, const char *sysroot,
-                                char *path, const char *op, const char *pkg) {
-  IndexData *indexdata;
-  if (!llrb_path_indexdata_get_ref(index, &path, &indexdata)) {
-    // create a new node for future reference.
-    char *pathkey = strdup(path);
-    IndexData id = {
-        .computed_actual = false,
-    };
-    llrb_char_ptr_fileclaim_new(&id.claims);
-    indexdata = llrb_path_indexdata_insert(index, &pathkey, &id);
-  }
-
-  if (indexdata->computed_actual) {
-    return indexdata;
-  }
-
-  char *fullpath;
-  asprintf(&fullpath, "%s/%s", sysroot, path);
-  defer free(fullpath);
-
-  switch (path_type_portable(fullpath)) {
-  case PATH_TYPE_MISSING:
-    indexdata->actual.exists = false;
-    break;
-  case PATH_TYPE_DIR:
-    indexdata->actual.exists = true;
-    indexdata->actual.is_directory = true;
-    break;
-  case PATH_TYPE_FILE: {
-    uint32_t crc;
-    ErrVal err = file_crc32(fullpath, &crc, op, pkg);
-    if (err != ERR_OK) {
-      return NULL;
-    }
-    indexdata->actual.exists = true;
-    indexdata->actual.is_directory = false;
-    indexdata->actual.crc32 = crc;
-    break;
-  }
-  case PATH_TYPE_OTHER:
-    // sockets, devices, fifos: reading one for a crc could block forever, so
-    // record it as a file whose crc only collides with an empty file's (0)
-    indexdata->actual.exists = true;
-    indexdata->actual.is_directory = false;
-    indexdata->actual.crc32 = 0;
-    break;
-  case PATH_TYPE_ERROR:
-    LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "%s %s: could not stat %s: %s", op, pkg,
-                   fullpath, strerror(errno));
-    return NULL;
-  }
-
-  indexdata->computed_actual = true;
-  return indexdata;
-}
-
-static void delete_char_ptr_fileclaims(llrb_char_ptr_fileclaim *claims) {
-  llrb_char_ptr_fileclaim_iter claims_iter;
-  llrb_char_ptr_fileclaim_iter_begin(claims, &claims_iter);
-  char_ptr claims_key;
-  while (llrb_char_ptr_fileclaim_iter_next(&claims_iter, &claims_key, NULL)) {
-    free(claims_key);
-  }
-  llrb_char_ptr_fileclaim_delete(claims);
-}
-
-void delete_file_index(llrb_path_indexdata *index) {
-  llrb_path_indexdata_iter index_iter;
-  llrb_path_indexdata_iter_begin(index, &index_iter);
-  char_ptr index_key;
-  IndexData indexdata;
-  while (llrb_path_indexdata_iter_next(&index_iter, &index_key, &indexdata)) {
-    delete_char_ptr_fileclaims(&indexdata.claims);
-    free(index_key);
-  }
-  llrb_path_indexdata_delete(index);
-}
 
 // create sysroot and its ancestors. package-relative directories don't come
 // through here: the claims tree lists every one of them, parents strictly
@@ -458,7 +52,7 @@ static ErrVal ensure_sysroot_exists(const char *package, const char *sysroot) {
   return ERR_OK;
 }
 
-int copy_file(const char *from, const char *to) {
+static int copy_file(const char *from, const char *to) {
   FILE *src = fopen(from, "rb");
   if (src == NULL) {
     return -1;
@@ -535,6 +129,8 @@ void execute_fsops(vec_fsop_t *fsops, const bool dry_run) {
       break;
 
     case FSOP_REMOVEFILE:
+      LOG_ERROR_ARGS(ERR_LEVEL_INFO, "%s %s: removing file %s", o->op, o->pkg,
+                     o->removefile.path);
       if (!dry_run && remove(o->removefile.path) != 0) {
         LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "%s %s: could not remove file %s: %s",
                        o->op, o->pkg, o->removefile.path, strerror(errno));
@@ -550,6 +146,8 @@ void execute_fsops(vec_fsop_t *fsops, const bool dry_run) {
       }
       break;
     case FSOP_RMDIR:
+      LOG_ERROR_ARGS(ERR_LEVEL_INFO, "%s %s: removing directory %s", o->op,
+                     o->pkg, o->rmdir.path);
       if (!dry_run && rmdir_portable(o->rmdir.path) != 0) {
         LOG_ERROR_ARGS(ERR_LEVEL_ERROR,
                        "%s %s: could not remove directory %s: %s", o->op,
@@ -598,7 +196,7 @@ static ErrVal compute_match_status(
   *otherpackage = NULL;
 
   IndexData *indexdata =
-      ensure_actual(index, sysroot, path, "install", package);
+      fileindex_ensure_actual(index, sysroot, path, "install", package);
   if (indexdata == NULL) {
     // something went wrong, bail
     return ERR_UNKNOWN;
@@ -628,63 +226,52 @@ static bool in_protected_paths(vec_char_ptr *protected_paths, char *path) {
   return false;
 }
 
-static char *mkfullpath(const char *sysroot, const char *path,
-                        const char *suffix) {
-  char *fullpath;
-  if (path == NULL) {
-    assert(suffix == NULL);
-    fullpath = strdup(sysroot);
-  } else {
-    asprintf(&fullpath, "%s/%s%s", sysroot, path, suffix);
-  }
-  return fullpath;
-}
-
-void fsops_emit_install(const char *op, const char *pkg, const char *sysroot,
-                        const char *path, const char *suffix, FileClaim claim,
-                        mz_zip_archive *zip,
-                        // appends to this
-                        vec_fsop_t *fsops) {
+void fsops_emit_install(
+    // for logging only
+    const char *op, const char *pkg,
+    // takes ownership of path
+    char *path, FileClaim claim, mz_zip_archive *zip,
+    // appends to this
+    vec_fsop_t *fsops) {
 
   fsop_t o = {.op = op, .pkg = strdup(pkg)};
   if (claim.is_directory) {
     o.kind = FSOP_MKDIR;
-    o.mkdir.path = mkfullpath(sysroot, path, suffix);
+    o.mkdir.path = path;
   } else {
     o.kind = FSOP_CREATEFILE;
-    o.createfile.path = mkfullpath(sysroot, path, suffix);
+    o.createfile.path = path;
     o.createfile.file_index = claim.file_index;
     o.createfile.zip = zip;
   }
   vec_fsop_t_push(fsops, &o);
 }
 
-void fsops_emit_rm(const char *op, const char *pkg, const char *sysroot,
-                   const char *path, const char *suffix,
-                   // appends to this
-                   vec_fsop_t *fsops) {
+void fsops_emit_rm(
+    // logging
+    const char *op, const char *pkg,
+    // takes ownership
+    char *path,
+    // appends to this
+    vec_fsop_t *fsops) {
   fsop_t o = {.op = op, .pkg = strdup(pkg)};
   o.kind = FSOP_REMOVEFILE;
-  o.removefile.path = mkfullpath(sysroot, path, suffix);
+  o.removefile.path = path;
   vec_fsop_t_push(fsops, &o);
 }
 
-void fsops_emit_rmdir(const char *op, const char *pkg, const char *sysroot,
-                      const char *path, const char *suffix,
+void fsops_emit_rmdir(const char *op, const char *pkg, char *path,
                       // appends to this
                       vec_fsop_t *fsops) {
   fsop_t o = {.op = op, .pkg = strdup(pkg)};
   o.kind = FSOP_RMDIR;
-  o.rmdir.path = mkfullpath(sysroot, path, suffix);
+  o.rmdir.path = path;
   vec_fsop_t_push(fsops, &o);
 }
 
-void fsops_emit_mv(const char *op, const char *pkg, const char *fromsysroot,
-                   const char *frompath, const char *fromsuffix,
-                   const char *tosysroot, const char *topath,
-                   const char *tosuffix, vec_fsop_t *fsops) {
-  char *from = mkfullpath(fromsysroot, frompath, fromsuffix);
-  char *to = mkfullpath(tosysroot, topath, tosuffix);
+void fsops_emit_mv(const char *op, const char *pkg, char *from, char *to,
+                   vec_fsop_t *fsops) {
+
   if (from == to) {
     free(from);
     free(to);
@@ -697,14 +284,9 @@ void fsops_emit_mv(const char *op, const char *pkg, const char *fromsysroot,
   vec_fsop_t_push(fsops, &o);
 }
 
-void fsops_emit_cp(const char *op, const char *pkg,
-
-                   const char *fromsysroot, const char *frompath,
-                   const char *fromsuffix, const char *tosysroot,
-                   const char *topath, const char *tosuffix,
+void fsops_emit_cp(const char *op, const char *pkg, char *from, char *to,
                    vec_fsop_t *fsops) {
-  char *from = mkfullpath(fromsysroot, frompath, fromsuffix);
-  char *to = mkfullpath(tosysroot, topath, tosuffix);
+
   if (from == to) {
     free(from);
     free(to);
@@ -722,27 +304,25 @@ void fsops_emit_cp(const char *op, const char *pkg,
 // it's not a protected path
 // doesn't log errors if it's not actually a directory. Only logs errors if we
 // fail to read a file
-ErrVal fsops_emit_rm_rf(const char *op, const char *pkg, const char *sysroot,
-                        const char *path, const char *suffix,
+ErrVal fsops_emit_rm_rf(const char *op, const char *pkg,
+                        // takes ownership
+                        char *path,
                         // appends to this
                         vec_fsop_t *fsops
 
 ) {
-  char *fullpath = mkfullpath(sysroot, path, suffix);
-
-  switch (path_type_portable(fullpath)) {
+  switch (path_type_portable(path)) {
   case PATH_TYPE_MISSING:
-    free(fullpath);
+    free(path);
     return ERR_OK;
   case PATH_TYPE_FILE:
   case PATH_TYPE_OTHER:
-    fsops_emit_rm(op, pkg, fullpath, NULL, NULL, fsops);
-    free(fullpath);
+    fsops_emit_rm(op, pkg, path, fsops);
     return ERR_OK;
   case PATH_TYPE_ERROR:
     LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "%s %s: could not stat %s: %s", op, pkg,
-                   fullpath, strerror(errno));
-    free(fullpath);
+                   path, strerror(errno));
+    free(path);
     return ERR_NOSUCHFILE;
   case PATH_TYPE_DIR:
     break;
@@ -750,7 +330,7 @@ ErrVal fsops_emit_rm_rf(const char *op, const char *pkg, const char *sysroot,
 
   vec_char_ptr dirs_to_visit;
   vec_char_ptr_init(&dirs_to_visit);
-  vec_char_ptr_push(&dirs_to_visit, &fullpath);
+  vec_char_ptr_push(&dirs_to_visit, &path);
   defer vec_char_ptr_delete_and_freeowned(&dirs_to_visit);
 
   vec_char_ptr dirs_visited;
@@ -779,15 +359,14 @@ ErrVal fsops_emit_rm_rf(const char *op, const char *pkg, const char *sysroot,
     // delete mere files
     for (size_t i = 0; i < vec_char_ptr_len(&file_entries); i++) {
       char *entry = *vec_char_ptr_at(&file_entries, i);
-      fsops_emit_rm(op, pkg, p, entry, "", fsops);
+      fsops_emit_rm(op, pkg, mkfullpath(p, entry, ""), fsops);
     }
     vec_char_ptr_clear_and_freeowned(&file_entries);
 
     // recurse into subfolders
     for (size_t i = 0; i < vec_char_ptr_len(&dir_entries); i++) {
       char *entry = *vec_char_ptr_at(&dir_entries, i);
-      char *subdir;
-      asprintf(&subdir, "%s/%s", p, entry);
+      char *subdir = mkfullpath(p, entry, "");
       vec_char_ptr_push(&dirs_to_visit, &subdir);
     }
     vec_char_ptr_clear_and_freeowned(&dir_entries);
@@ -796,8 +375,7 @@ ErrVal fsops_emit_rm_rf(const char *op, const char *pkg, const char *sysroot,
   // now delete the seen dirs in reverse order
   for (size_t i_r = vec_char_ptr_len(&dirs_visited); i_r > 0; i_r--) {
     size_t i = i_r - 1;
-    fsops_emit_rmdir(op, pkg, *vec_char_ptr_at(&dirs_visited, i), NULL, NULL,
-                     fsops);
+    fsops_emit_rmdir(op, pkg, *vec_char_ptr_at(&dirs_visited, i), fsops);
   }
   return ERR_OK;
 }
@@ -853,8 +431,8 @@ ErrVal fsops_emit_install_package(
     free(pZip);
     return ERR_UNKNOWN;
   }
-  collect_file_claims(pZip, "install", package, &claims);
-  defer delete_file_claims(&claims);
+  fileclaims_collect(pZip, "install", package, &claims);
+  defer fileclaims_delete(&claims);
 
   vec_fsop_t pkfsops;
   vec_fsop_t_init(&pkfsops);
@@ -901,7 +479,8 @@ ErrVal fsops_emit_install_package(
         should_not_install = true;
       } else {
         if (in_protected_paths(protected_paths, path)) {
-          if (fsops_emit_rm_rf("install", package, sysroot, path, ".zpknew",
+          if (fsops_emit_rm_rf("install", package,
+                               mkfullpath(sysroot, path, ".zpknew"),
                                &pkfsops) != ERR_OK) {
             should_not_install = true;
             continue;
@@ -911,8 +490,9 @@ ErrVal fsops_emit_install_package(
               "install %s: installing new %s as %s.zpknew (no match + "
               "in protected path)",
               package, path, path);
-          fsops_emit_install("install", package, sysroot, path, ".zpknew",
-                             claim, pZip, &pkfsops);
+          fsops_emit_install("install", package,
+                             mkfullpath(sysroot, path, ".zpknew"), claim, pZip,
+                             &pkfsops);
 
           // emit diversion for future files
           char *src = strdup(path);
@@ -926,20 +506,21 @@ ErrVal fsops_emit_install_package(
               "install %s: renaming old %s to %s.zpksave (no match + "
               "not in protected path)",
               package, path, path);
-          if (fsops_emit_rm_rf("install", package, sysroot, path, ".zpksave",
+          if (fsops_emit_rm_rf("install", package,
+                               mkfullpath(sysroot, path, ".zpksave"),
                                &pkfsops) != ERR_OK) {
             should_not_install = true;
             continue;
           }
-          fsops_emit_mv("install", package, sysroot, path, "", sysroot, path,
-                        ".zpksave", &pkfsops);
-          fsops_emit_install("install", package, sysroot, path, "", claim, pZip,
-                             &pkfsops);
+          fsops_emit_mv("install", package, mkfullpath(sysroot, path, ""),
+                        mkfullpath(sysroot, path, ".zpksave"), &pkfsops);
+          fsops_emit_install("install", package, mkfullpath(sysroot, path, ""),
+                             claim, pZip, &pkfsops);
         }
       }
     } else {
-      fsops_emit_install("install", package, sysroot, path, "", claim, pZip,
-                         &pkfsops);
+      fsops_emit_install("install", package, mkfullpath(sysroot, path, ""),
+                         claim, pZip, &pkfsops);
     }
   }
 
@@ -980,15 +561,15 @@ ErrVal fsops_emit_uninstall_package(
   mz_zip_zero_struct(pZip);
   if (!mz_zip_reader_init_file(pZip, package_path, 0)) {
     LOG_ERROR_ARGS(ERR_LEVEL_ERROR,
-                   "install %s: could not open zip archive %s: %s", package,
+                   "uninstall %s: could not open zip archive %s: %s", package,
                    package_path,
                    mz_zip_get_error_string(mz_zip_get_last_error(pZip)));
     free(pZip);
     return ERR_UNKNOWN;
   }
   llrb_char_ptr_fileclaim claims;
-  collect_file_claims(pZip, "install", package, &claims);
-  defer delete_file_claims(&claims);
+  fileclaims_collect(pZip, "uninstall", package, &claims);
+  defer fileclaims_delete(&claims);
   mz_zip_reader_end(pZip);
   free(pZip);
 
@@ -1027,9 +608,11 @@ ErrVal fsops_emit_uninstall_package(
           // if it matches us and doesn't match other, it belongs to us and we
           // remove it
           if (claim.is_directory) {
-            fsops_emit_rmdir("uninstall", package, sysroot, path, "", &pkfsops);
+            fsops_emit_rmdir("uninstall", package,
+                             mkfullpath(sysroot, path, ""), &pkfsops);
           } else {
-            fsops_emit_rm("uninstall", package, sysroot, path, "", &pkfsops);
+            fsops_emit_rm("uninstall", package, mkfullpath(sysroot, path, ""),
+                          &pkfsops);
           }
         }
       } else if (matchesother) {

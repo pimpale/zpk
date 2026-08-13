@@ -1,4 +1,5 @@
 #include "pathutils.h"
+#include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -94,4 +95,99 @@ char *cleanpath(const char *path) {
   }
   out[out_len] = '\0';
   return out;
+}
+
+
+// normalize the filename by dropping "." components and empty components
+// (leading, doubled, and trailing slashes). if the filename is bad (has a
+// ".." component, contains a backslash, or normalizes to nothing) then return
+// NULL. caller must free the returned string if it is not NULL
+char *normalize(const char *filename) {
+  char *out = malloc(strlen(filename) + 1);
+  size_t out_len = 0;
+  // where the current component starts in out; rewinding to this drops the
+  // component without disturbing the separator before it
+  size_t comp_start = 0;
+  enum { CS_START, CS_ONEDOT, CS_TWODOTS, CS_OTHER } state = CS_START;
+  for (const char *p = filename;; p++) {
+    char c = *p;
+    if (c == '\0' || c == '/') {
+      if (state == CS_TWODOTS) {
+        free(out);
+        return NULL;
+      }
+      if (state == CS_START || state == CS_ONEDOT) {
+        // empty or "." component: drop it
+        out_len = comp_start;
+      } else if (c == '/') {
+        out[out_len++] = '/';
+        comp_start = out_len;
+      }
+      state = CS_START;
+      if (c == '\0') {
+        break;
+      }
+    } else if (c == '\\') {
+      // forbid \\ because it might be a path traversal on windows.
+      free(out);
+      return NULL;
+    } else {
+      out[out_len++] = c;
+      if (c == '.') {
+        if (state == CS_START) {
+          state = CS_ONEDOT;
+        } else if (state == CS_ONEDOT) {
+          state = CS_TWODOTS;
+        } else {
+          state = CS_OTHER;
+        }
+      } else {
+        state = CS_OTHER;
+      }
+    }
+  }
+  if (out_len == 0) {
+    free(out);
+    return NULL;
+  }
+  // omit trailing / for normalization purposes
+  if (out[out_len - 1] == '/') {
+    out_len--;
+  }
+  out[out_len] = '\0';
+
+  return out;
+}
+
+bool endswith(const char *str, const char *suffix) {
+  size_t len = strlen(str);
+  size_t suflen = strlen(suffix);
+  if (suflen > len) {
+    return false;
+  }
+  return strcmp(str + (len - suflen), suffix) == 0;
+}
+
+// returns the last part of the path
+const char *basename(const char *input) {
+  const char *c = strrchr(input, '/');
+  if (c == NULL) {
+    return NULL;
+  }
+  if (*c == '\0') {
+    return NULL;
+  }
+  return c;
+}
+
+char *mkfullpath(const char *sysroot, const char *path,
+                        const char *suffix) {
+  char *fullpath;
+  if (path == NULL) {
+    assert(suffix == NULL);
+    fullpath = strdup(sysroot);
+  } else {
+    asprintf(&fullpath, "%s/%s%s", sysroot, path, suffix);
+  }
+  return fullpath;
 }

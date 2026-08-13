@@ -72,8 +72,9 @@ static int do_add(ZpkConfiguration *pConf, vec_char_ptr *packages,
     }
 
     // if good emit final fsop copying the zip to the install directory
-    fsops_emit_cp("install", package, NULL, package_path, "", pConf->pkgs_path,
-                  basename(package_path), "", &fsops);
+    fsops_emit_cp("install", package, strdup(package_path),
+                  mkfullpath(pConf->pkgs_path, basename(package_path), ""),
+                  &fsops);
   }
   if (!should_proceed) {
     return 1;
@@ -137,7 +138,7 @@ static int do_del(ZpkConfiguration *pConf, vec_char_ptr *packages,
     }
 
     // if good to proceed emit final fsop removing the zip
-    fsops_emit_rm("uninstall", package, NULL, package_path, "", &fsops);
+    fsops_emit_rm("uninstall", package, strdup(package_path), &fsops);
   }
   if (!should_proceed) {
     return 1;

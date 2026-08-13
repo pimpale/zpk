@@ -48,8 +48,7 @@ static char *resolve_config_relative(const char *config_path, const char *raw) {
 static void push_protected_path(vec_char_ptr *out, const char *config_path,
                                 const char *key, const TomlValue *elem) {
   if (elem->type != TOML_STRING) {
-    LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "%s: %s must be strings", config_path,
-                   key);
+    LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "%s: %s must be strings", config_path, key);
     PANIC();
   }
   const char *rule = elem->value.string->str;
@@ -99,6 +98,8 @@ static void maybe_apply_config_file(ZpkConfiguration *config, const char *path,
     }
     free(config->sysroot);
     config->sysroot = resolve_config_relative(path, val->value.string->str);
+    LOG_ERROR_ARGS(ERR_LEVEL_DEBUG, "%s: sysroot set to %s", path,
+                   config->sysroot);
   }
 
   val = toml_table_get(table, "pkgs_path");
@@ -109,6 +110,8 @@ static void maybe_apply_config_file(ZpkConfiguration *config, const char *path,
     }
     free(config->pkgs_path);
     config->pkgs_path = resolve_config_relative(path, val->value.string->str);
+    LOG_ERROR_ARGS(ERR_LEVEL_DEBUG, "%s: pkgs_path set to %s", path,
+                   config->pkgs_path);
   }
 
   val = toml_table_get(table, "repositories");
@@ -120,6 +123,7 @@ static void maybe_apply_config_file(ZpkConfiguration *config, const char *path,
     }
     // repositories (and not extra repositories) means that we replace any
     // existing repositories with the ones in the config file:
+    LOG_ERROR_ARGS(ERR_LEVEL_DEBUG, "%s: repositories vector reset", path);
     vec_char_ptr_clear_and_freeowned(&config->repositories);
     for (size_t i = 0; i < val->value.array->len; i++) {
       TomlValue *elem = val->value.array->elements[i];
@@ -130,6 +134,8 @@ static void maybe_apply_config_file(ZpkConfiguration *config, const char *path,
       }
       char_ptr repo = resolve_config_relative(path, elem->value.string->str);
       vec_char_ptr_push(&config->repositories, &repo);
+      LOG_ERROR_ARGS(ERR_LEVEL_DEBUG, "%s: repositories vector: added %s", path,
+                     repo);
     }
   }
 
@@ -151,6 +157,8 @@ static void maybe_apply_config_file(ZpkConfiguration *config, const char *path,
       }
       char_ptr repo = resolve_config_relative(path, elem->value.string->str);
       vec_char_ptr_push(&config->repositories, &repo);
+      LOG_ERROR_ARGS(ERR_LEVEL_DEBUG, "%s: repositories vector: added %s", path,
+                     repo);
     }
   }
 
@@ -497,7 +505,7 @@ void parse_args(int argc, char **argv, ZpkConfiguration *config,
     PANIC();
   }
 
-  uint32_t ntargets = vec_char_ptr_len(&targets);
+  size_t ntargets = vec_char_ptr_len(&targets);
   switch (kind) {
   case ZPK_OP_ADD:
   case ZPK_OP_DEL:
