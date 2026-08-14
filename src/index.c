@@ -7,7 +7,7 @@
 
 #include "error.h"
 #include "index.h"
-#include "instances/llrbset_char_ptr.h"
+#include "instances/llrb_char_ptr_packagedata.h"
 #include "oscompatlayer.h"
 #include "pathutils.h"
 
@@ -115,17 +115,52 @@ COLLECT_ONE_FILE:
   }
 }
 
+bool fileindex_contains_package(fileindex_t *fileindex, char *package_path,
+                                bool *changed_during_transaction) {
+  llrb_char_ptr_packagedata *packages = &fileindex->packages;
+  PackageData packagedata;
+  if (llrb_char_ptr_packagedata_get(packages, &package_path, &packagedata)) {
+    *changed_during_transaction = packagedata.changed_during_transaction;
+    return packagedata.installed;
+  } else {
+    *changed_during_transaction = false;
+    return false;
+  }
+}
+
 // move every claim into the shared index as `package`'s IndexDataEntry,
 // consuming the tree: each path key is either handed to the index or freed.
 // on return `claims` is empty (but not deleted!)
 ErrVal merge_claims_into_index(fileindex_t *fileindex, const char *package_path,
                                llrb_char_ptr_fileclaim *claims,
                                bool simulate_installed) {
-  llrbset_char_ptr *packages = &fileindex->packages;
-  char *owned_package_path = strdup(package_path);
-  if (!llrbset_char_ptr_insert(packages, &owned_package_path)) {
-    free(owned_package_path);
-    return ERR_UNKNOWN;
+
+  {
+    llrb_char_ptr_packagedata *packages = &fileindex->packages;
+    char *owned_package_path = strdup(package_path);
+    PackageData packagedata_ins = {
+        .installed = true,
+        .changed_during_transaction = simulate_installed,
+    };
+    if (llrb_char_ptr_packagedata_insert(packages, &owned_package_path,
+                                         &packagedata_ins) == NULL) {
+      // the package already existed, we can free this
+      // but remember: it can be the case that the package exists in the map but
+      // was uninstalled in a prior transaction
+      defer free(owned_package_path);
+
+      PackageData *packagedata_cur;
+      assert(llrb_char_ptr_packagedata_get_ref(packages, &owned_package_path,
+                                               &packagedata_cur));
+
+      if (packagedata_cur->installed) {
+        return ERR_UNKNOWN;
+      }
+
+      // now set the current value of the packagedata
+      packagedata_cur->installed = true;
+      packagedata_cur->changed_during_transaction = simulate_installed;
+    }
   }
 
   llrb_path_indexdata *index = &fileindex->index;
@@ -157,16 +192,18 @@ ErrVal merge_claims_into_index(fileindex_t *fileindex, const char *package_path,
     assert(llrb_char_ptr_fileclaim_insert(&data->claims, &key, &claim) != NULL);
   }
   llrb_char_ptr_fileclaim_clear(claims);
+  return ERR_OK;
 }
 
 // remove all claims from the index (if they exist). Doesn't error if they're
 // not there.
 void remove_claims_from_index(fileindex_t *fileindex, char *package_path,
                               llrb_char_ptr_fileclaim *claims) {
-  llrbset_char_ptr *packages = &fileindex->packages;
+  llrb_char_ptr_packagedata *packages = &fileindex->packages;
 
   char *old_package_path;
-  if (!llrbset_char_ptr_remove(packages, &package_path, &old_package_path)) {
+  if (!llrb_char_ptr_packagedata_remove(packages, &package_path,
+                                        &old_package_path, NULL)) {
     // can return early if we don't have this in the index
     return;
   }
@@ -200,8 +237,8 @@ void remove_claims_from_index(fileindex_t *fileindex, char *package_path,
 // only_installed (mandatory for now) only builds the index with installed files
 // (useful for ownership tests)
 void fileindex_build(fileindex_t *fileindex, char *pkgs_path) {
-  llrbset_char_ptr *packages = &fileindex->packages;
-  llrbset_char_ptr_new(packages);
+  llrb_char_ptr_packagedata *packages = &fileindex->packages;
+  llrb_char_ptr_packagedata_new(packages);
 
   llrb_path_indexdata *index = &fileindex->index;
   llrb_path_indexdata_new(index);
@@ -358,5 +395,5 @@ void fileindex_delete(fileindex_t *fileindex) {
     free(index_key);
   }
   llrb_path_indexdata_delete(index);
-  llrbset_char_ptr_delete_and_freeowned(&fileindex->packages);
+  llrb_char_ptr_packagedata_delete_and_freeowned(&fileindex->packages);
 }

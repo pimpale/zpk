@@ -2,7 +2,7 @@
 #define fsops_h_INCLUDED
 
 #include "error.h"
-#include "instances/llrb_path_indexdata.h"
+#include "index.h"
 #include "instances/vec_char_ptr.h"
 #include "instances/vec_fsop_t.h"
 #include "instances/vec_mz_zip_archive_ptr.h"
@@ -36,10 +36,19 @@ void fsops_emit_rmdir(
     // appends to this
     vec_fsop_t *fsops);
 
-void fsops_emit_mv(const char *op, const char *pkg, char *from, char *to, vec_fsop_t *fsops);
+void fsops_emit_mv(const char *op, const char *pkg, char *from, char *to,
+                   vec_fsop_t *fsops);
 
 void fsops_emit_cp(const char *op, const char *pkg, char *from, char *to,
                    vec_fsop_t *fsops);
+
+ErrVal fsops_emit_rm_rf(const char *op, const char *pkg,
+                        // takes ownership
+                        char *path,
+                        // appends to this
+                        vec_fsop_t *fsops
+
+);
 
 ErrVal fsops_emit_install_package(
     // appends to this if the operation would succeed
@@ -48,7 +57,7 @@ ErrVal fsops_emit_install_package(
     // would succeed
     vec_mz_zip_archive_ptr *zips,
     // file index (for file conflict identification)
-    llrb_path_indexdata *index,
+    fileindex_t *index,
     // user given package name (For logging)
     char *package,
     // zip file to install
@@ -65,7 +74,7 @@ ErrVal fsops_emit_uninstall_package(
     // would succeed
     vec_mz_zip_archive_ptr *zips,
     // file index (for file conflict identification)
-    llrb_path_indexdata *index,
+    fileindex_t *index,
     // user given package name (For logging)
     char *package,
     // zip file to uninstall

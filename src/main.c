@@ -5,6 +5,7 @@
 
 #include "asprintf/asprintf.h"
 #include "configuration.h"
+#include "index.h"
 #include "fsops.h"
 #include "instances/vec_char_ptr.h"
 #include "instances/vec_fsop_t.h"
@@ -46,9 +47,9 @@ static int do_add(ZpkConfiguration *pConf, vec_char_ptr *packages,
   }
 
   // build index
-  llrb_path_indexdata index;
-  build_file_index(&index, pConf->pkgs_path);
-  defer delete_file_index(&index);
+  fileindex_t index;
+  fileindex_build(&index, pConf->pkgs_path);
+  defer fileindex_delete(&index);
 
   // create the fsops vec and the zips vec
   vec_fsop_t fsops;
@@ -111,9 +112,9 @@ static int do_del(ZpkConfiguration *pConf, vec_char_ptr *packages,
   }
 
   // build index
-  llrb_path_indexdata index;
-  build_file_index(&index, pConf->pkgs_path);
-  defer delete_file_index(&index);
+  fileindex_t index;
+  fileindex_build(&index, pConf->pkgs_path);
+  defer fileindex_delete(&index);
 
   // create the fsops vec and the zips vec
   vec_fsop_t fsops;

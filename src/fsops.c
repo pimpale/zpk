@@ -21,7 +21,6 @@
 #include "oscompatlayer.h"
 #include "pathutils.h"
 
-
 // create sysroot and its ancestors. package-relative directories don't come
 // through here: the claims tree lists every one of them, parents strictly
 // before children, so install creates them in iteration order
@@ -173,11 +172,9 @@ static ErrVal compute_match_status(
     // index must not contain the package we're considering
     // (natural for installation, means package must be removed from index prior
     // to uninstallation)
-
-    llrb_path_indexdata *index,
-
-    // the package name
-    const char *package,
+    fileindex_t *index,
+    // for logging only
+    const char *op, const char *pkg,
     // sysroot
     const char *sysroot,
 
@@ -195,8 +192,7 @@ static ErrVal compute_match_status(
   *matchesother = false;
   *otherpackage = NULL;
 
-  IndexData *indexdata =
-      fileindex_ensure_actual(index, sysroot, path, "install", package);
+  IndexData *indexdata = fileindex_ensure_actual(index, sysroot, path, op, pkg);
   if (indexdata == NULL) {
     // something went wrong, bail
     return ERR_UNKNOWN;
@@ -271,12 +267,6 @@ void fsops_emit_rmdir(const char *op, const char *pkg, char *path,
 
 void fsops_emit_mv(const char *op, const char *pkg, char *from, char *to,
                    vec_fsop_t *fsops) {
-
-  if (from == to) {
-    free(from);
-    free(to);
-    return;
-  }
   fsop_t o = {.op = op,
               .pkg = strdup(pkg),
               .kind = FSOP_RENAME,
@@ -286,12 +276,6 @@ void fsops_emit_mv(const char *op, const char *pkg, char *from, char *to,
 
 void fsops_emit_cp(const char *op, const char *pkg, char *from, char *to,
                    vec_fsop_t *fsops) {
-
-  if (from == to) {
-    free(from);
-    free(to);
-    return;
-  }
   fsop_t o = {.op = op,
               .pkg = strdup(pkg),
               .kind = FSOP_COPY,
@@ -410,7 +394,7 @@ ErrVal fsops_emit_install_package(
     // would succeed
     vec_mz_zip_archive_ptr *zips,
     // file index (for file conflict identification)
-    llrb_path_indexdata *index,
+    fileindex_t *index,
     // user given package name (For logging)
     char *package,
     // zip file to install
@@ -419,6 +403,16 @@ ErrVal fsops_emit_install_package(
     char *sysroot,
     // protected paths
     vec_char_ptr *protected_paths) {
+
+  bool changed_during_transaction = false;
+  if (fileindex_contains_package(index, package_path,
+                                  &changed_during_transaction)) {
+    LOG_ERROR_ARGS(
+        ERR_LEVEL_ERROR, "install %s: package is already installed%s", package,
+        changed_during_transaction ? "(uninstalled during this transaction)"
+                                   : "");
+    return ERR_UNKNOWN;
+  }
 
   llrb_char_ptr_fileclaim claims;
   mz_zip_archive *pZip = malloc(sizeof(mz_zip_archive));
@@ -465,8 +459,8 @@ ErrVal fsops_emit_install_package(
     bool matchesus;
     bool matchesother;
     char *otherpackage = NULL;
-    compute_match_status(index, package, sysroot, path, claim, &exists,
-                         &matchesus, &matchesother, &otherpackage);
+    compute_match_status(index, "install", package, sysroot, path, claim,
+                         &exists, &matchesus, &matchesother, &otherpackage);
 
     if (exists) {
       if (matchesus) {
@@ -536,7 +530,9 @@ ErrVal fsops_emit_install_package(
   vec_mz_zip_archive_ptr_push(zips, &pZip);
 
   // add to index
-  merge_claims_into_index(index, package_path, &claims, true);
+  // must work because we already checked that package_path was not in the index
+  assert(merge_claims_into_index(index, package_path, &claims, true) == ERR_OK);
+
   return ERR_OK;
 }
 
@@ -547,7 +543,7 @@ ErrVal fsops_emit_uninstall_package(
     // would succeed
     vec_mz_zip_archive_ptr *zips,
     // file index (for file conflict identification)
-    llrb_path_indexdata *index,
+    fileindex_t *index,
     // user given package name (For logging)
     char *package,
     // zip file to uninstall
@@ -556,6 +552,16 @@ ErrVal fsops_emit_uninstall_package(
     char *sysroot,
     // protected paths
     vec_char_ptr *protected_paths) {
+
+  bool changed_during_transaction = false;
+  if (!fileindex_contains_package(index, package_path,
+                                  &changed_during_transaction)) {
+    LOG_ERROR_ARGS(
+        ERR_LEVEL_ERROR, "uninstall %s: package %s %s", package, package,
+        changed_during_transaction ? "would be uninstalled earlier during this transaction"
+                                   : "is not installed");
+    return ERR_UNKNOWN;
+  }
 
   mz_zip_archive *pZip = malloc(sizeof(mz_zip_archive));
   mz_zip_zero_struct(pZip);
@@ -596,8 +602,8 @@ ErrVal fsops_emit_uninstall_package(
     bool matchesus;
     bool matchesother;
     char *otherpackage = NULL;
-    compute_match_status(index, package, sysroot, path, claim, &exists,
-                         &matchesus, &matchesother, &otherpackage);
+    compute_match_status(index, "uninstall", package, sysroot, path, claim,
+                         &exists, &matchesus, &matchesother, &otherpackage);
 
     if (exists) {
       if (matchesus) {
