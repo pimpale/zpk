@@ -21,36 +21,6 @@
 #include "oscompatlayer.h"
 #include "pathutils.h"
 
-// create sysroot and its ancestors. package-relative directories don't come
-// through here: the claims tree lists every one of them, parents strictly
-// before children, so install creates them in iteration order
-static ErrVal ensure_sysroot_exists(const char *package, const char *sysroot) {
-  // append a trailing '/' so the loop sees a boundary for sysroot itself
-  char *path;
-  asprintf(&path, "%s/", sysroot);
-  defer free(path);
-  // path+1: if sysroot is absolute the first boundary belongs to the root,
-  // and creating it would be mkdir_portable(""), which fails with ENOENT
-  // rather than EEXIST
-  for (char *p = path + 1; *p != '\0'; p++) {
-    if (*p == '/') {
-      *p = '\0';
-      int result = mkdir_portable(path, 0o755);
-      if (result == 0) {
-        LOG_ERROR_ARGS(ERR_LEVEL_DEBUG, "install %s: created directory %s",
-                       package, path);
-      } else if (errno != EEXIST) {
-        LOG_ERROR_ARGS(ERR_LEVEL_ERROR,
-                       "install %s: could not create directory %s: %s", package,
-                       path, strerror(errno));
-        return ERR_UNKNOWN;
-      }
-      *p = '/';
-    }
-  }
-  return ERR_OK;
-}
-
 static int copy_file(const char *from, const char *to) {
   FILE *src = fopen(from, "rb");
   if (src == NULL) {
@@ -169,15 +139,13 @@ static bool is_match(FileStatus fs, FileClaim claim) {
 
 // compute the status of the actual file wrt the package claims
 static ErrVal compute_match_status(
-    // index must not contain the package we're considering
-    // (natural for installation, means package must be removed from index prior
-    // to uninstallation)
     fileindex_t *index,
     // for logging only
-    const char *op, const char *pkg,
+    const char *op,
+    // package
+    const char *package,
     // sysroot
     const char *sysroot,
-
     // path to the file we're considering (relative to sysroot)
     char *path,
     // the corresponding fileclaim
@@ -192,28 +160,39 @@ static ErrVal compute_match_status(
   *matchesother = false;
   *otherpackage = NULL;
 
-  IndexData *indexdata = fileindex_ensure_actual(index, sysroot, path, op, pkg);
-  if (indexdata == NULL) {
+  char *fullpath = mkfullpath(sysroot, path, "");
+  defer free(fullpath);
+
+  FileStatus *filestatus =
+      fileindex_ensure_actual(index, fullpath, op, package);
+  if (filestatus == NULL) {
     // something went wrong, bail
     return ERR_UNKNOWN;
   }
-  if (!indexdata->actual.exists) {
+  if (!filestatus->exists) {
     return ERR_OK;
   }
   *exists = true;
-  *matchesus = is_match(indexdata->actual, claim);
+  *matchesus = is_match(*filestatus, claim);
 
-  llrb_char_ptr_fileclaim_iter iter;
-  llrb_char_ptr_fileclaim_iter_begin(&indexdata->claims, &iter);
-  char_ptr package1;
-  FileClaim claim1;
-  while (llrb_char_ptr_fileclaim_iter_next(&iter, &package1, &claim1)) {
-    if (is_match(indexdata->actual, claim1)) {
-      *matchesother = true;
-      *otherpackage = package1;
-      break;
+  IndexData *indexdata;
+  if (llrb_path_indexdata_get_ref(&index->index, &path, &indexdata)) {
+    llrb_char_ptr_fileclaim_iter iter;
+    llrb_char_ptr_fileclaim_iter_begin(&indexdata->claims, &iter);
+    char_ptr package1;
+    FileClaim claim1;
+    while (llrb_char_ptr_fileclaim_iter_next(&iter, &package1, &claim1)) {
+      if (strcmp(package1, package) == 0) {
+        continue;
+      }
+      if (is_match(*filestatus, claim1)) {
+        *matchesother = true;
+        *otherpackage = package1;
+        break;
+      }
     }
   }
+
   return ERR_OK;
 }
 
@@ -222,65 +201,150 @@ static bool in_protected_paths(vec_char_ptr *protected_paths, char *path) {
   return false;
 }
 
+void fsops_emit_mkdir(
+    // for logging only
+    const char *op, const char *pkg,
+    // takes ownership of path
+    char *path,
+    // appends to this
+    vec_fsop_t *fsops,
+    // simulates the behavior in fileindex
+    fileindex_t *index) {
+  fsop_t o = {.op = op, .pkg = strdup(pkg)};
+  o.kind = FSOP_MKDIR;
+  o.mkdir.path = path;
+  vec_fsop_t_push(fsops, &o);
+
+  FileStatus *status = fileindex_status_or_default(index, path, NULL);
+  status->changed_during_transaction = true;
+  status->exists = true;
+}
+
 void fsops_emit_install(
     // for logging only
     const char *op, const char *pkg,
     // takes ownership of path
     char *path, FileClaim claim, mz_zip_archive *zip,
     // appends to this
-    vec_fsop_t *fsops) {
+    vec_fsop_t *fsops,
+    // simulates the behavior in fileindex
+    fileindex_t *index) {
 
-  fsop_t o = {.op = op, .pkg = strdup(pkg)};
   if (claim.is_directory) {
-    o.kind = FSOP_MKDIR;
-    o.mkdir.path = path;
+    fsops_emit_mkdir(op, pkg, path, fsops, index);
   } else {
+    fsop_t o = {.op = op, .pkg = strdup(pkg)};
     o.kind = FSOP_CREATEFILE;
     o.createfile.path = path;
     o.createfile.file_index = claim.file_index;
     o.createfile.zip = zip;
+
+    vec_fsop_t_push(fsops, &o);
+
+    // update filestatus
+    FileStatus *status = fileindex_status_or_default(index, path, NULL);
+    status->changed_during_transaction = true;
+    status->exists = true;
+    status->is_directory = false;
+    status->crc32 = claim.crc32;
   }
-  vec_fsop_t_push(fsops, &o);
+}
+
+ErrVal fsops_emit_mkdir_p( // logging only
+    const char *op, const char *pkg,
+    // takes ownership
+    char *path,
+    // file index op
+    vec_fsop_t *fsops,
+    // simulates the behavior in fileindex
+    fileindex_t *index) {
+  char *p = path;
+  while (true) {
+    bool nullbyte = *p == '\0';
+    if (nullbyte || *p == '/') {
+      *p = '\0';
+      if (strlen(path) > 0) {
+        FileStatus *fs = fileindex_ensure_actual(index, path, op, pkg);
+        if (!(fs->exists && fs->is_directory)) {
+          char *ownedpath = strdup(path);
+          fsops_emit_mkdir(op, pkg, ownedpath, fsops, index);
+        }
+      }
+      *p = '/';
+    }
+    if (nullbyte) {
+      break;
+    }
+    p++;
+  }
+  free(path);
+  return ERR_OK;
 }
 
 void fsops_emit_rm(
     // logging
     const char *op, const char *pkg,
     // takes ownership
-    char *path,
-    // appends to this
-    vec_fsop_t *fsops) {
+    char *path, vec_fsop_t *fsops,
+    // simulates the behavior in fileindex
+    fileindex_t *index) {
   fsop_t o = {.op = op, .pkg = strdup(pkg)};
   o.kind = FSOP_REMOVEFILE;
   o.removefile.path = path;
   vec_fsop_t_push(fsops, &o);
+
+  FileStatus *status = fileindex_status_or_default(index, path, NULL);
+  status->changed_during_transaction = true;
+  status->exists = false;
 }
 
 void fsops_emit_rmdir(const char *op, const char *pkg, char *path,
-                      // appends to this
-                      vec_fsop_t *fsops) {
+                      vec_fsop_t *fsops,
+                      // simulates the behavior in fileindex
+                      fileindex_t *index) {
   fsop_t o = {.op = op, .pkg = strdup(pkg)};
   o.kind = FSOP_RMDIR;
   o.rmdir.path = path;
   vec_fsop_t_push(fsops, &o);
+
+  FileStatus *status = fileindex_status_or_default(index, path, NULL);
+  status->changed_during_transaction = true;
+  status->exists = false;
 }
 
 void fsops_emit_mv(const char *op, const char *pkg, char *from, char *to,
-                   vec_fsop_t *fsops) {
+                   vec_fsop_t *fsops, fileindex_t *index) {
   fsop_t o = {.op = op,
               .pkg = strdup(pkg),
               .kind = FSOP_RENAME,
               .rename = {.from = from, .to = to}};
   vec_fsop_t_push(fsops, &o);
+
+  // these may alias
+  FileStatus *fromstatus = fileindex_status_or_default(index, from, NULL);
+  FileStatus *tostatus = fileindex_status_or_default(index, to, NULL);
+
+  fromstatus->changed_during_transaction = true;
+  *tostatus = *fromstatus;
+
+  fromstatus->exists = false;
+  tostatus->exists = true;
 }
 
 void fsops_emit_cp(const char *op, const char *pkg, char *from, char *to,
-                   vec_fsop_t *fsops) {
+                   vec_fsop_t *fsops, fileindex_t *index) {
   fsop_t o = {.op = op,
               .pkg = strdup(pkg),
               .kind = FSOP_COPY,
               .copy = {.from = from, .to = to}};
   vec_fsop_t_push(fsops, &o);
+
+  // these may alias
+  FileStatus *fromstatus = fileindex_status_or_default(index, from, NULL);
+  FileStatus *tostatus = fileindex_status_or_default(index, to, NULL);
+
+  *tostatus = *fromstatus;
+  tostatus->changed_during_transaction = true;
 }
 
 // rm -rf on the path
@@ -290,9 +354,9 @@ void fsops_emit_cp(const char *op, const char *pkg, char *from, char *to,
 // fail to read a file
 ErrVal fsops_emit_rm_rf(const char *op, const char *pkg,
                         // takes ownership
-                        char *path,
-                        // appends to this
-                        vec_fsop_t *fsops
+                        char *path, vec_fsop_t *fsops,
+                        // simulates the behavior in fileindex
+                        fileindex_t *index
 
 ) {
   switch (path_type_portable(path)) {
@@ -301,7 +365,7 @@ ErrVal fsops_emit_rm_rf(const char *op, const char *pkg,
     return ERR_OK;
   case PATH_TYPE_FILE:
   case PATH_TYPE_OTHER:
-    fsops_emit_rm(op, pkg, path, fsops);
+    fsops_emit_rm(op, pkg, path, fsops, index);
     return ERR_OK;
   case PATH_TYPE_ERROR:
     LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "%s %s: could not stat %s: %s", op, pkg,
@@ -343,7 +407,7 @@ ErrVal fsops_emit_rm_rf(const char *op, const char *pkg,
     // delete mere files
     for (size_t i = 0; i < vec_char_ptr_len(&file_entries); i++) {
       char *entry = *vec_char_ptr_at(&file_entries, i);
-      fsops_emit_rm(op, pkg, mkfullpath(p, entry, ""), fsops);
+      fsops_emit_rm(op, pkg, mkfullpath(p, entry, ""), fsops, index);
     }
     vec_char_ptr_clear_and_freeowned(&file_entries);
 
@@ -359,7 +423,7 @@ ErrVal fsops_emit_rm_rf(const char *op, const char *pkg,
   // now delete the seen dirs in reverse order
   for (size_t i_r = vec_char_ptr_len(&dirs_visited); i_r > 0; i_r--) {
     size_t i = i_r - 1;
-    fsops_emit_rmdir(op, pkg, *vec_char_ptr_at(&dirs_visited, i), fsops);
+    fsops_emit_rmdir(op, pkg, *vec_char_ptr_at(&dirs_visited, i), fsops, index);
   }
   return ERR_OK;
 }
@@ -395,8 +459,6 @@ ErrVal fsops_emit_install_package(
     vec_mz_zip_archive_ptr *zips,
     // file index (for file conflict identification)
     fileindex_t *index,
-    // user given package name (For logging)
-    char *package,
     // zip file to install
     char *package_path,
     // where to install
@@ -404,13 +466,16 @@ ErrVal fsops_emit_install_package(
     // protected paths
     vec_char_ptr *protected_paths) {
 
+  char *package = basename_m(package_path);
+  assert(package != NULL);
+
   bool changed_during_transaction = false;
-  if (fileindex_contains_package(index, package_path,
-                                  &changed_during_transaction)) {
-    LOG_ERROR_ARGS(
-        ERR_LEVEL_ERROR, "install %s: package is already installed%s", package,
-        changed_during_transaction ? "(uninstalled during this transaction)"
-                                   : "");
+  if (fileindex_contains_package(index, package, &changed_during_transaction)) {
+    LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "install %s: package %s %s", package,
+                   package,
+                   changed_during_transaction
+                       ? "was already installed earlier in this transaction"
+                       : "is already installed");
     return ERR_UNKNOWN;
   }
 
@@ -474,8 +539,8 @@ ErrVal fsops_emit_install_package(
       } else {
         if (in_protected_paths(protected_paths, path)) {
           if (fsops_emit_rm_rf("install", package,
-                               mkfullpath(sysroot, path, ".zpknew"),
-                               &pkfsops) != ERR_OK) {
+                               mkfullpath(sysroot, path, ".zpknew"), &pkfsops,
+                               index) != ERR_OK) {
             should_not_install = true;
             continue;
           }
@@ -486,7 +551,7 @@ ErrVal fsops_emit_install_package(
               package, path, path);
           fsops_emit_install("install", package,
                              mkfullpath(sysroot, path, ".zpknew"), claim, pZip,
-                             &pkfsops);
+                             &pkfsops, index);
 
           // emit diversion for future files
           char *src = strdup(path);
@@ -501,20 +566,20 @@ ErrVal fsops_emit_install_package(
               "not in protected path)",
               package, path, path);
           if (fsops_emit_rm_rf("install", package,
-                               mkfullpath(sysroot, path, ".zpksave"),
-                               &pkfsops) != ERR_OK) {
+                               mkfullpath(sysroot, path, ".zpksave"), &pkfsops,
+                               index) != ERR_OK) {
             should_not_install = true;
             continue;
           }
           fsops_emit_mv("install", package, mkfullpath(sysroot, path, ""),
-                        mkfullpath(sysroot, path, ".zpksave"), &pkfsops);
+                        mkfullpath(sysroot, path, ".zpksave"), &pkfsops, index);
           fsops_emit_install("install", package, mkfullpath(sysroot, path, ""),
-                             claim, pZip, &pkfsops);
+                             claim, pZip, &pkfsops, index);
         }
       }
     } else {
       fsops_emit_install("install", package, mkfullpath(sysroot, path, ""),
-                         claim, pZip, &pkfsops);
+                         claim, pZip, &pkfsops, index);
     }
   }
 
@@ -531,7 +596,8 @@ ErrVal fsops_emit_install_package(
 
   // add to index
   // must work because we already checked that package_path was not in the index
-  assert(merge_claims_into_index(index, package_path, &claims, true) == ERR_OK);
+  ErrVal merge_result = merge_claims_into_index(index, package, &claims, true);
+  assert(merge_result == ERR_OK);
 
   return ERR_OK;
 }
@@ -544,8 +610,6 @@ ErrVal fsops_emit_uninstall_package(
     vec_mz_zip_archive_ptr *zips,
     // file index (for file conflict identification)
     fileindex_t *index,
-    // user given package name (For logging)
-    char *package,
     // zip file to uninstall
     char *package_path,
     // where to uninstall
@@ -553,13 +617,17 @@ ErrVal fsops_emit_uninstall_package(
     // protected paths
     vec_char_ptr *protected_paths) {
 
+  char *package = basename_m(package_path);
+  assert(package != NULL);
+
   bool changed_during_transaction = false;
-  if (!fileindex_contains_package(index, package_path,
+  if (!fileindex_contains_package(index, package,
                                   &changed_during_transaction)) {
-    LOG_ERROR_ARGS(
-        ERR_LEVEL_ERROR, "uninstall %s: package %s %s", package, package,
-        changed_during_transaction ? "would be uninstalled earlier during this transaction"
-                                   : "is not installed");
+    LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "uninstall %s: package %s %s", package,
+                   package,
+                   changed_during_transaction
+                       ? "would be uninstalled earlier during this transaction"
+                       : "is not currently installed");
     return ERR_UNKNOWN;
   }
 
@@ -579,17 +647,9 @@ ErrVal fsops_emit_uninstall_package(
   mz_zip_reader_end(pZip);
   free(pZip);
 
-  // remove claims from index. Must use
-  remove_claims_from_index(index, package_path, &claims);
-
   vec_fsop_t pkfsops;
   vec_fsop_t_init(&pkfsops);
   defer vec_fsop_t_delete_and_freeowned(&pkfsops);
-
-  // set this to true if we reach a package-fatal error that means it shouldn't
-  // be removed we want to surface all errors though rather than just the
-  // first one
-  bool should_not_proceed = false;
 
   // remember: we go in reverse direction than installation,
   // because we must remove children before parents
@@ -615,10 +675,10 @@ ErrVal fsops_emit_uninstall_package(
           // remove it
           if (claim.is_directory) {
             fsops_emit_rmdir("uninstall", package,
-                             mkfullpath(sysroot, path, ""), &pkfsops);
+                             mkfullpath(sysroot, path, ""), &pkfsops, index);
           } else {
             fsops_emit_rm("uninstall", package, mkfullpath(sysroot, path, ""),
-                          &pkfsops);
+                          &pkfsops, index);
           }
         }
       } else if (matchesother) {
@@ -638,9 +698,7 @@ ErrVal fsops_emit_uninstall_package(
     }
   }
 
-  if (should_not_proceed) {
-    return ERR_UNSAFE;
-  }
+  remove_claims_from_index(index, package, &claims, true);
 
   // if all good transfer ownership of newly created pkgs
   vec_fsop_t_append(fsops, &pkfsops);

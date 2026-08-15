@@ -1,5 +1,5 @@
-#ifndef llrbset_char_ptr_h_INCLUDED
-#define llrbset_char_ptr_h_INCLUDED
+#ifndef llrb_char_ptr_packagedata_h_INCLUDED
+#define llrb_char_ptr_packagedata_h_INCLUDED
 
 typedef char *char_ptr;
 
@@ -21,4 +21,4 @@ typedef struct {
 void llrb_char_ptr_packagedata_clear_and_freeowned(llrb_char_ptr_packagedata *map);
 void llrb_char_ptr_packagedata_delete_and_freeowned(llrb_char_ptr_packagedata *map);
 
-#endif // llrbset_char_ptr_h_INCLUDED
+#endif // llrb_char_ptr_packagedata_h_INCLUDED

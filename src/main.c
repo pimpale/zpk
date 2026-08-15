@@ -3,10 +3,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "asprintf/asprintf.h"
 #include "configuration.h"
-#include "index.h"
 #include "fsops.h"
+#include "index.h"
 #include "instances/vec_char_ptr.h"
 #include "instances/vec_fsop_t.h"
 #include "instances/vec_mz_zip_archive_ptr.h"
@@ -39,13 +38,6 @@ static int do_add(ZpkConfiguration *pConf, vec_char_ptr *packages,
     PANIC();
   }
 
-  for (size_t i = 0; i < n_targets; i++) {
-    char *package = *vec_char_ptr_at(packages, i);
-    char *package_path;
-    asprintf(&package_path, "%s/%s", pConf->pkgs_path, package);
-    vec_char_ptr_push(&package_paths, &package_path);
-  }
-
   // build index
   fileindex_t index;
   fileindex_build(&index, pConf->pkgs_path);
@@ -60,12 +52,15 @@ static int do_add(ZpkConfiguration *pConf, vec_char_ptr *packages,
   vec_mz_zip_archive_ptr_init(&zips);
   defer vec_mz_zip_archive_ptr_delete_and_freeowned(&zips);
 
+  fsops_emit_mkdir_p("prepare", "install", strdup(pConf->sysroot), &fsops,
+                     &index);
+
   bool should_proceed = true;
   for (size_t i = 0; i < n_targets; i++) {
     char *package = *vec_char_ptr_at(packages, i);
     char *package_path = *vec_char_ptr_at(&package_paths, i);
     ErrVal err =
-        fsops_emit_install_package(&fsops, &zips, &index, package, package_path,
+        fsops_emit_install_package(&fsops, &zips, &index, package_path,
                                    pConf->sysroot, &pConf->protected_paths);
     if (err != ERR_OK) {
       should_proceed = false;
@@ -74,8 +69,8 @@ static int do_add(ZpkConfiguration *pConf, vec_char_ptr *packages,
 
     // if good emit final fsop copying the zip to the install directory
     fsops_emit_cp("install", package, strdup(package_path),
-                  mkfullpath(pConf->pkgs_path, basename(package_path), ""),
-                  &fsops);
+                  mkfullpath(pConf->pkgs_path, basename_m(package_path), ""),
+                  &fsops, &index);
   }
   if (!should_proceed) {
     return 1;
@@ -130,16 +125,16 @@ static int do_del(ZpkConfiguration *pConf, vec_char_ptr *packages,
   for (size_t i = 0; i < n_targets; i++) {
     char *package = *vec_char_ptr_at(packages, i);
     char *package_path = *vec_char_ptr_at(&package_paths, i);
-    ErrVal err = fsops_emit_uninstall_package(&fsops, &zips, &index, package,
-                                              package_path, pConf->sysroot,
-                                              &pConf->protected_paths);
+    ErrVal err =
+        fsops_emit_uninstall_package(&fsops, &zips, &index, package_path,
+                                     pConf->sysroot, &pConf->protected_paths);
     if (err != ERR_OK) {
       should_proceed = false;
       continue;
     }
 
     // if good to proceed emit final fsop removing the zip
-    fsops_emit_rm("uninstall", package, strdup(package_path), &fsops);
+    fsops_emit_rm("uninstall", package, strdup(package_path), &fsops, &index);
   }
   if (!should_proceed) {
     return 1;

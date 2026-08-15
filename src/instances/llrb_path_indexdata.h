@@ -4,16 +4,6 @@
 #include "instances/llrb_char_ptr_fileclaim.h"
 
 typedef struct {
-  bool exists;
-  // these 2 are only defined if it actually exists
-  bool is_directory; 
-  uint32_t crc32; // only defined if is_directory == false
-} FileStatus;
-
-
-typedef struct {
-  bool computed_actual;
-  FileStatus actual;
   // Map<PackagePath, FileClaim>
   llrb_char_ptr_fileclaim claims;
 } IndexData;

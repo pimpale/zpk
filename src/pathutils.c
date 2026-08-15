@@ -15,7 +15,7 @@ char *expandtilde(const char *input) {
     return strdup(input);
   }
 
-  const char* home = getenv_home_portable();
+  const char *home = getenv_home_portable();
 
   if (home == NULL) {
     LOG_ERROR(ERR_LEVEL_FATAL,
@@ -97,7 +97,6 @@ char *cleanpath(const char *path) {
   return out;
 }
 
-
 // normalize the filename by dropping "." components and empty components
 // (leading, doubled, and trailing slashes). if the filename is bad (has a
 // ".." component, contains a backslash, or normalizes to nothing) then return
@@ -169,19 +168,14 @@ bool endswith(const char *str, const char *suffix) {
 }
 
 // returns the last part of the path
-const char *basename(const char *input) {
-  const char *c = strrchr(input, '/');
-  if (c == NULL) {
-    return NULL;
-  }
-  if (*c == '\0') {
-    return NULL;
-  }
-  return c;
+// the path MUST be absolute
+char *basename_m(char *input) {
+  char *c = strrchr(input, '/');
+  assert(c != NULL);
+  return c + 1;
 }
 
-char *mkfullpath(const char *sysroot, const char *path,
-                        const char *suffix) {
+char *mkfullpath(const char *sysroot, const char *path, const char *suffix) {
   char *fullpath;
   if (path == NULL) {
     assert(suffix == NULL);

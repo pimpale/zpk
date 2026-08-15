@@ -8,6 +8,7 @@
 #include "error.h"
 #include "index.h"
 #include "instances/llrb_char_ptr_packagedata.h"
+#include "instances/llrb_path_filestatus.h"
 #include "oscompatlayer.h"
 #include "pathutils.h"
 
@@ -79,10 +80,6 @@ COLLECT_ONE_FILE:
                      op, package, name);
       continue;
     }
-    if (strcmp(normalized, name) != 0) {
-      LOG_ERROR_ARGS(ERR_LEVEL_DEBUG, "%s %s: normalized filename %s to %s", op,
-                     package, name, normalized);
-    }
     if (!file_stat.m_is_directory && !file_stat.m_is_supported) {
       LOG_ERROR_ARGS(ERR_LEVEL_ERROR,
                      "%s %s: file %s is encrypted or uses an unsupported "
@@ -115,11 +112,11 @@ COLLECT_ONE_FILE:
   }
 }
 
-bool fileindex_contains_package(fileindex_t *fileindex, char *package_path,
+bool fileindex_contains_package(fileindex_t *fileindex, char *package,
                                 bool *changed_during_transaction) {
   llrb_char_ptr_packagedata *packages = &fileindex->packages;
   PackageData packagedata;
-  if (llrb_char_ptr_packagedata_get(packages, &package_path, &packagedata)) {
+  if (llrb_char_ptr_packagedata_get(packages, &package, &packagedata)) {
     *changed_during_transaction = packagedata.changed_during_transaction;
     return packagedata.installed;
   } else {
@@ -131,27 +128,28 @@ bool fileindex_contains_package(fileindex_t *fileindex, char *package_path,
 // move every claim into the shared index as `package`'s IndexDataEntry,
 // consuming the tree: each path key is either handed to the index or freed.
 // on return `claims` is empty (but not deleted!)
-ErrVal merge_claims_into_index(fileindex_t *fileindex, const char *package_path,
+ErrVal merge_claims_into_index(fileindex_t *fileindex, const char *package,
                                llrb_char_ptr_fileclaim *claims,
                                bool simulate_installed) {
 
   {
     llrb_char_ptr_packagedata *packages = &fileindex->packages;
-    char *owned_package_path = strdup(package_path);
+    char *owned_package_basename = strdup(package);
     PackageData packagedata_ins = {
         .installed = true,
         .changed_during_transaction = simulate_installed,
     };
-    if (llrb_char_ptr_packagedata_insert(packages, &owned_package_path,
+    if (llrb_char_ptr_packagedata_insert(packages, &owned_package_basename,
                                          &packagedata_ins) == NULL) {
       // the package already existed, we can free this
       // but remember: it can be the case that the package exists in the map but
       // was uninstalled in a prior transaction
-      defer free(owned_package_path);
+      defer free(owned_package_basename);
 
       PackageData *packagedata_cur;
-      assert(llrb_char_ptr_packagedata_get_ref(packages, &owned_package_path,
-                                               &packagedata_cur));
+      bool got_ref = llrb_char_ptr_packagedata_get_ref(
+          packages, &owned_package_basename, &packagedata_cur);
+      assert(got_ref);
 
       if (packagedata_cur->installed) {
         return ERR_UNKNOWN;
@@ -180,16 +178,11 @@ ErrVal merge_claims_into_index(fileindex_t *fileindex, const char *package_path,
       // path already indexed; the index keeps its own key
       free(path);
     }
-    if (simulate_installed) {
-      data->computed_actual = true;
-      data->actual.exists = true;
-      data->actual.is_directory = claim.is_directory;
-      data->actual.crc32 = claim.crc32;
-    }
-
-    char *key = strdup(package_path);
+    char *key = strdup(package);
     // duplicate package path should have been caught earlier
-    assert(llrb_char_ptr_fileclaim_insert(&data->claims, &key, &claim) != NULL);
+    bool inserted =
+        llrb_char_ptr_fileclaim_insert(&data->claims, &key, &claim) != NULL;
+    assert(inserted);
   }
   llrb_char_ptr_fileclaim_clear(claims);
   return ERR_OK;
@@ -197,17 +190,20 @@ ErrVal merge_claims_into_index(fileindex_t *fileindex, const char *package_path,
 
 // remove all claims from the index (if they exist). Doesn't error if they're
 // not there.
-void remove_claims_from_index(fileindex_t *fileindex, char *package_path,
-                              llrb_char_ptr_fileclaim *claims) {
+// leaves tombstone entry in packages to allow us to raise more meaningful
+// errors
+void remove_claims_from_index(fileindex_t *fileindex, char *package,
+                              llrb_char_ptr_fileclaim *claims,
+                              bool simulate_uninstall) {
   llrb_char_ptr_packagedata *packages = &fileindex->packages;
 
-  char *old_package_path;
-  if (!llrb_char_ptr_packagedata_remove(packages, &package_path,
-                                        &old_package_path, NULL)) {
-    // can return early if we don't have this in the index
+  PackageData *packagedata;
+  if (!llrb_char_ptr_packagedata_get_ref(packages, &package, &packagedata)) {
+    // return early, was never there
     return;
   }
-  free(old_package_path);
+  packagedata->installed = false;
+  packagedata->changed_during_transaction = simulate_uninstall;
 
   llrb_path_indexdata *index = &fileindex->index;
   llrb_char_ptr_fileclaim_iter iter;
@@ -218,10 +214,10 @@ void remove_claims_from_index(fileindex_t *fileindex, char *package_path,
     IndexData *data = NULL;
     if (llrb_path_indexdata_get_ref(index, &path, &data)) {
       char_ptr removed_key = NULL;
-      if (llrb_char_ptr_fileclaim_remove(&data->claims, &package_path,
-                                         &removed_key, NULL)) {
+      if (llrb_char_ptr_fileclaim_remove(&data->claims, &package, &removed_key,
+                                         NULL)) {
         free(removed_key);
-        if (data->claims.len == 0 && !data->computed_actual) {
+        if (data->claims.len == 0) {
           char_ptr removed_path = NULL;
           if (llrb_path_indexdata_remove(index, &path, &removed_path, NULL)) {
             free(removed_path);
@@ -243,6 +239,9 @@ void fileindex_build(fileindex_t *fileindex, char *pkgs_path) {
   llrb_path_indexdata *index = &fileindex->index;
   llrb_path_indexdata_new(index);
 
+  llrb_path_filestatus *statuses = &fileindex->statuses;
+  llrb_path_filestatus_new(statuses);
+
   // first list files in the pkgs path:
   vec_char_ptr entries;
   vec_char_ptr_init(&entries);
@@ -259,6 +258,7 @@ void fileindex_build(fileindex_t *fileindex, char *pkgs_path) {
     if (!endswith(entry, ".zip")) {
       continue;
     }
+
     char *package_path;
     asprintf(&package_path, "%s/%s", pkgs_path, entry);
     defer free(package_path);
@@ -274,8 +274,8 @@ void fileindex_build(fileindex_t *fileindex, char *pkgs_path) {
     }
 
     llrb_char_ptr_fileclaim claims;
-    fileclaims_collect(&zip, "index", package_path, &claims);
-    merge_claims_into_index(fileindex, package_path, &claims, false);
+    fileclaims_collect(&zip, "index", entry, &claims);
+    merge_claims_into_index(fileindex, entry, &claims, false);
     fileclaims_delete(&claims);
   }
 }
@@ -312,39 +312,48 @@ static ErrVal file_crc32(const char *path, uint32_t *out, const char *op,
   return ERR_OK;
 }
 
+FileStatus *fileindex_status_or_default(fileindex_t *fileindex,
+                                        const char *path, bool *created) {
+  FileStatus *status;
+  FileStatus default_status = {};
+  // create a new node for future reference.
+  char *pathkey = strdup(path);
+  status = llrb_path_filestatus_insert(&fileindex->statuses, &pathkey,
+                                       &default_status);
+  if (created != NULL) {
+    *created = status != NULL;
+  }
+  if (status == NULL) {
+    // node already exists
+    bool got_ref =
+        llrb_path_filestatus_get_ref(&fileindex->statuses, &pathkey, &status);
+    assert(got_ref);
+    free(pathkey);
+  }
+  return status;
+}
+
 // pass op and pkg to enable logging
 // creates an empty llrb leaf if needed
 // returns Indexdata pointer on success, NULL on failure
-IndexData *fileindex_ensure_actual(fileindex_t *fileindex, const char *sysroot,
-                                   char *path, const char *op,
-                                   const char *pkg) {
-  llrb_path_indexdata *index = &fileindex->index;
-  IndexData *indexdata;
-  if (!llrb_path_indexdata_get_ref(index, &path, &indexdata)) {
-    // create a new node for future reference.
-    char *pathkey = strdup(path);
-    IndexData id = {
-        .computed_actual = false,
-    };
-    llrb_char_ptr_fileclaim_new(&id.claims);
-    indexdata = llrb_path_indexdata_insert(index, &pathkey, &id);
+FileStatus *fileindex_ensure_actual(fileindex_t *fileindex,
+                                    const char *fullpath,
+                                    // logging purposes only
+                                    const char *op, const char *pkg) {
+  bool created;
+  FileStatus *status =
+      fileindex_status_or_default(fileindex, fullpath, &created);
+  if (!created) {
+    return status;
   }
-
-  if (indexdata->computed_actual) {
-    return indexdata;
-  }
-
-  char *fullpath;
-  asprintf(&fullpath, "%s/%s", sysroot, path);
-  defer free(fullpath);
 
   switch (path_type_portable(fullpath)) {
   case PATH_TYPE_MISSING:
-    indexdata->actual.exists = false;
+    status->exists = false;
     break;
   case PATH_TYPE_DIR:
-    indexdata->actual.exists = true;
-    indexdata->actual.is_directory = true;
+    status->exists = true;
+    status->is_directory = true;
     break;
   case PATH_TYPE_FILE: {
     uint32_t crc;
@@ -352,26 +361,26 @@ IndexData *fileindex_ensure_actual(fileindex_t *fileindex, const char *sysroot,
     if (err != ERR_OK) {
       return NULL;
     }
-    indexdata->actual.exists = true;
-    indexdata->actual.is_directory = false;
-    indexdata->actual.crc32 = crc;
+    status->exists = true;
+    status->is_directory = false;
+    status->crc32 = crc;
     break;
   }
   case PATH_TYPE_OTHER:
     // sockets, devices, fifos: reading one for a crc could block forever, so
     // record it as a file whose crc only collides with an empty file's (0)
-    indexdata->actual.exists = true;
-    indexdata->actual.is_directory = false;
-    indexdata->actual.crc32 = 0;
+    status->exists = true;
+    status->is_directory = false;
+    status->crc32 = 0;
     break;
   case PATH_TYPE_ERROR:
     LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "%s %s: could not stat %s: %s", op, pkg,
                    fullpath, strerror(errno));
+
     return NULL;
   }
 
-  indexdata->computed_actual = true;
-  return indexdata;
+  return status;
 }
 
 static void delete_char_ptr_fileclaims(llrb_char_ptr_fileclaim *claims) {
@@ -396,4 +405,5 @@ void fileindex_delete(fileindex_t *fileindex) {
   }
   llrb_path_indexdata_delete(index);
   llrb_char_ptr_packagedata_delete_and_freeowned(&fileindex->packages);
+  llrb_path_filestatus_delete_and_freeowned(&fileindex->statuses);
 }
