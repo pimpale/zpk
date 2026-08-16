@@ -24,19 +24,22 @@ void fileclaims_delete(llrb_char_ptr_fileclaim *claims) {
   llrb_char_ptr_fileclaim_delete(claims);
 }
 
-// insert one claim, taking ownership of path (freed here when not kept).
+// insert one claim. Only borrows path.
 // duplicate directory claims collapse silently (implied parents repeat for
 // every file below them); any duplicate involving a file claim means the zip
 // claims one path as two files or as both file and directory — reject
 static bool insert_file_claim(llrb_char_ptr_fileclaim *claims,
                               // logging
                               const char *op, const char *pkg,
+                              // sysroot
+                              const char *sysroot,
                               // key pair to insert
                               char *path, const FileClaim *claim) {
+  char *fullpath = joinstr3(sysroot, "/", path);
   FileClaim *existing = NULL;
-  if (!llrb_char_ptr_fileclaim_get_ref(claims, &path, &existing)) {
-    // the tree now owns `path`
-    llrb_char_ptr_fileclaim_insert(claims, &path, claim);
+  if (!llrb_char_ptr_fileclaim_get_ref(claims, &fullpath, &existing)) {
+    // the tree now owns `fullpath`
+    llrb_char_ptr_fileclaim_insert(claims, &fullpath, claim);
     return true;
   }
   bool compatible = existing->is_directory && claim->is_directory;
@@ -47,7 +50,7 @@ static bool insert_file_claim(llrb_char_ptr_fileclaim *claims,
                    op, pkg, path, existing->is_directory ? "directory" : "file",
                    claim->is_directory ? "directory" : "file");
   }
-  free(path);
+  free(fullpath);
   return compatible;
 }
 
@@ -55,7 +58,7 @@ static bool insert_file_claim(llrb_char_ptr_fileclaim *claims,
 void fileclaims_collect(mz_zip_archive *zip,
                         // logging only
                         const char *op, const char *package,
-                        llrb_char_ptr_fileclaim *claims) {
+                        const char *sysroot, llrb_char_ptr_fileclaim *claims) {
   llrb_char_ptr_fileclaim_new(claims);
   mz_uint num_files = mz_zip_reader_get_num_files(zip);
 COLLECT_ONE_FILE:
@@ -75,6 +78,7 @@ COLLECT_ONE_FILE:
     mz_zip_reader_get_filename(zip, i, name, need);
 
     char *normalized = normalize(name);
+    defer free(normalized);
     if (normalized == NULL) {
       LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "%s %s: invalid filename %s, skipping",
                      op, package, name);
@@ -89,18 +93,17 @@ COLLECT_ONE_FILE:
     }
 
     // implied parent directories, outermost first
+    FileClaim dir_claim = {.is_directory = true};
     for (char *p = normalized; *p != '\0'; p++) {
       if (*p != '/') {
         continue;
       }
       *p = '\0';
-      char *parent = strdup(normalized);
-      *p = '/';
-      FileClaim parent_claim = {.is_directory = true};
-      if (!insert_file_claim(claims, op, package, parent, &parent_claim)) {
-        free(normalized);
+      if (!insert_file_claim(claims, op, package, sysroot, normalized,
+                             &dir_claim)) {
         continue COLLECT_ONE_FILE;
       }
+      *p = '/';
     }
 
     FileClaim claim = {
@@ -108,7 +111,7 @@ COLLECT_ONE_FILE:
         .crc32 = file_stat.m_is_directory ? 0 : file_stat.m_crc32,
         .is_directory = file_stat.m_is_directory,
     };
-    insert_file_claim(claims, op, package, normalized, &claim);
+    insert_file_claim(claims, op, package, sysroot, normalized, &claim);
   }
 }
 
@@ -232,7 +235,8 @@ void remove_claims_from_index(fileindex_t *fileindex, char *package,
 // the files in it
 // only_installed (mandatory for now) only builds the index with installed files
 // (useful for ownership tests)
-void fileindex_build(fileindex_t *fileindex, char *pkgs_path) {
+void fileindex_build(fileindex_t *fileindex, const char *sysroot,
+                     char *pkgs_path) {
   llrb_char_ptr_packagedata *packages = &fileindex->packages;
   llrb_char_ptr_packagedata_new(packages);
 
@@ -274,7 +278,7 @@ void fileindex_build(fileindex_t *fileindex, char *pkgs_path) {
     }
 
     llrb_char_ptr_fileclaim claims;
-    fileclaims_collect(&zip, "index", entry, &claims);
+    fileclaims_collect(&zip, "index", entry, sysroot, &claims);
     merge_claims_into_index(fileindex, entry, &claims, false);
     fileclaims_delete(&claims);
   }

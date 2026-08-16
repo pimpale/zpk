@@ -2,11 +2,10 @@
 #define pathutils_h_INCLUDED
 
 char *expandtilde(const char *input);
-char *cleanpath(const char *path);
 char *normalize(const char *path);
 char *basename_m(char *input);
 bool endswith(const char *str, const char *suffix);
-char *mkfullpath(const char *sysroot, const char *path,
-                        const char *suffix);
+char *joinstr2(const char *s1, const char *s2);
+char *joinstr3(const char *s1, const char *s2, const char* s3);
 
 #endif // pathutils_h_INCLUDED

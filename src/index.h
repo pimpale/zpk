@@ -15,7 +15,7 @@ typedef struct {
 } fileindex_t;
 
 // file index manipulation ops
-void fileindex_build(fileindex_t *index, char *pkgs_path);
+void fileindex_build(fileindex_t *index, const char* sysroot, char *pkgs_path);
 void fileindex_delete(fileindex_t *index);
 
 bool fileindex_contains_package(fileindex_t *index, char *package_basename,
@@ -33,11 +33,12 @@ FileStatus *fileindex_ensure_actual(fileindex_t *index, const char *fullpath, co
 void fileclaims_collect(mz_zip_archive *zip,
                         // logging only
                         const char *op, const char *package,
+                        const char* sysroot,
                         llrb_char_ptr_fileclaim *claims);
 void fileclaims_delete(llrb_char_ptr_fileclaim *claims);
 
 // claim-tree file-index interactions
-ErrVal merge_claims_into_index(fileindex_t *index, const char *package_basename,
+ErrVal merge_claims_into_index(fileindex_t *index, const char *package,
                                llrb_char_ptr_fileclaim *claims,
                                bool simulate_installed);
 

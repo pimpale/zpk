@@ -4,11 +4,15 @@
 #include <string.h>
 
 #include "configuration.h"
+#include "error.h"
 #include "fsops.h"
 #include "index.h"
+#include "instances/llrb_char_ptr_fileclaim.h"
+#include "instances/llrb_path_indexdata.h"
 #include "instances/vec_char_ptr.h"
 #include "instances/vec_fsop_t.h"
 #include "instances/vec_mz_zip_archive_ptr.h"
+#include "oscompatlayer.h"
 #include "pathutils.h"
 
 static int do_fetch(ZpkConfiguration *pConf, vec_char_ptr *pTargets,
@@ -40,7 +44,7 @@ static int do_add(ZpkConfiguration *pConf, vec_char_ptr *packages,
 
   // build index
   fileindex_t index;
-  fileindex_build(&index, pConf->pkgs_path);
+  fileindex_build(&index, pConf->sysroot, pConf->pkgs_path);
   defer fileindex_delete(&index);
 
   // create the fsops vec and the zips vec
@@ -59,6 +63,12 @@ static int do_add(ZpkConfiguration *pConf, vec_char_ptr *packages,
   for (size_t i = 0; i < n_targets; i++) {
     char *package = *vec_char_ptr_at(packages, i);
     char *package_path = *vec_char_ptr_at(&package_paths, i);
+
+    // journal intent by moving the thing first. Then we can patch it up. if there's a crash.
+    fsops_emit_cp("install", package, strdup(package_path),
+                  joinstr3(pConf->pkgs_path, "/", basename_m(package_path)),
+                  &fsops, &index);
+
     ErrVal err =
         fsops_emit_install_package(&fsops, &zips, &index, package_path,
                                    pConf->sysroot, &pConf->protected_paths);
@@ -66,11 +76,6 @@ static int do_add(ZpkConfiguration *pConf, vec_char_ptr *packages,
       should_proceed = false;
       continue;
     }
-
-    // if good emit final fsop copying the zip to the install directory
-    fsops_emit_cp("install", package, strdup(package_path),
-                  mkfullpath(pConf->pkgs_path, basename_m(package_path), ""),
-                  &fsops, &index);
   }
   if (!should_proceed) {
     return 1;
@@ -108,7 +113,7 @@ static int do_del(ZpkConfiguration *pConf, vec_char_ptr *packages,
 
   // build index
   fileindex_t index;
-  fileindex_build(&index, pConf->pkgs_path);
+  fileindex_build(&index, pConf->sysroot, pConf->pkgs_path);
   defer fileindex_delete(&index);
 
   // create the fsops vec and the zips vec
@@ -134,6 +139,8 @@ static int do_del(ZpkConfiguration *pConf, vec_char_ptr *packages,
     }
 
     // if good to proceed emit final fsop removing the zip
+    // this happens last because if the uninstall is interrupted we want to be
+    // able to resume it.
     fsops_emit_rm("uninstall", package, strdup(package_path), &fsops, &index);
   }
   if (!should_proceed) {
@@ -168,8 +175,25 @@ static int do_list(ZpkConfiguration *pConf, bool installed, bool upgradable,
 
 // which package owns each path
 static int do_owner(ZpkConfiguration *pConf, char *path) {
-  (void)pConf;
-  (void)path;
+  // build index
+  fileindex_t index;
+  fileindex_build(&index, pConf->sysroot, pConf->pkgs_path);
+  defer fileindex_delete(&index);
+
+  char* abspath = abspath_portable(path);
+  defer free(abspath);
+
+  IndexData *indexdata;
+  if (!llrb_path_indexdata_get_ref(&index.index, &abspath, &indexdata)) {
+    LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "no package owns %s", path);
+    return 1;
+  }
+  llrb_char_ptr_fileclaim_iter iter;
+  llrb_char_ptr_fileclaim_iter_begin(&indexdata->claims, &iter);
+  char *package;
+  while (llrb_char_ptr_fileclaim_iter_next(&iter, &package, NULL)) {
+    puts(package);
+  }
   return 0;
 }
 

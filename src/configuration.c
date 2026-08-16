@@ -320,15 +320,15 @@ static void resolve_configuration(ZpkConfiguration *config,
     asprintf(&config->pkgs_path, trailing_slash ? "%spkg" : "%s/pkg",
              config->sysroot);
   }
-  // sysroot and pkgs_path are assembled from joins that can leave "."
-  // components or doubled slashes behind (e.g. "$cwd/./zpkroot"); clean them
-  // once here so every path later joined onto them stays clean
-  char *cleaned = cleanpath(config->sysroot);
+
+  // absolutize once here so every path later joined onto these stays clean
+  // and cwd-independent
+  char *resolved = abspath_portable(config->sysroot);
   free(config->sysroot);
-  config->sysroot = cleaned;
-  cleaned = cleanpath(config->pkgs_path);
+  config->sysroot = resolved;
+  resolved = abspath_portable(config->pkgs_path);
   free(config->pkgs_path);
-  config->pkgs_path = cleaned;
+  config->pkgs_path = resolved;
 
   if (cli_extra_repositories != NULL) {
     // we follow APK semantics in that -X/--repository appends to the list of

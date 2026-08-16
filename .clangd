@@ -1,0 +1,10 @@
+If:
+  PathMatch: platsrc/windows/.*
+CompileFlags:
+  Add: [--target=x86_64-w64-windows-gnu]
+  Remove: [-fsanitize=address]
+---
+If:
+  PathMatch: platsrc/posix/.*
+CompileFlags:
+  Remove: [--target=*]

@@ -7,7 +7,6 @@
 #include <time.h>
 
 #include "apkver/apkver.h"
-#include "asprintf/asprintf.h"
 #include "error.h"
 #include "fsop.h"
 #include "fsops.h"
@@ -144,10 +143,8 @@ static ErrVal compute_match_status(
     const char *op,
     // package
     const char *package,
-    // sysroot
-    const char *sysroot,
     // path to the file we're considering (relative to sysroot)
-    char *path,
+    char *fullpath,
     // the corresponding fileclaim
     FileClaim claim,
 
@@ -159,9 +156,6 @@ static ErrVal compute_match_status(
   *matchesus = false;
   *matchesother = false;
   *otherpackage = NULL;
-
-  char *fullpath = mkfullpath(sysroot, path, "");
-  defer free(fullpath);
 
   FileStatus *filestatus =
       fileindex_ensure_actual(index, fullpath, op, package);
@@ -176,7 +170,7 @@ static ErrVal compute_match_status(
   *matchesus = is_match(*filestatus, claim);
 
   IndexData *indexdata;
-  if (llrb_path_indexdata_get_ref(&index->index, &path, &indexdata)) {
+  if (llrb_path_indexdata_get_ref(&index->index, &fullpath, &indexdata)) {
     llrb_char_ptr_fileclaim_iter iter;
     llrb_char_ptr_fileclaim_iter_begin(&indexdata->claims, &iter);
     char_ptr package1;
@@ -407,14 +401,14 @@ ErrVal fsops_emit_rm_rf(const char *op, const char *pkg,
     // delete mere files
     for (size_t i = 0; i < vec_char_ptr_len(&file_entries); i++) {
       char *entry = *vec_char_ptr_at(&file_entries, i);
-      fsops_emit_rm(op, pkg, mkfullpath(p, entry, ""), fsops, index);
+      fsops_emit_rm(op, pkg, joinstr3(p, "/", entry), fsops, index);
     }
     vec_char_ptr_clear_and_freeowned(&file_entries);
 
     // recurse into subfolders
     for (size_t i = 0; i < vec_char_ptr_len(&dir_entries); i++) {
       char *entry = *vec_char_ptr_at(&dir_entries, i);
-      char *subdir = mkfullpath(p, entry, "");
+      char *subdir = joinstr3(p, "/", entry);
       vec_char_ptr_push(&dirs_to_visit, &subdir);
     }
     vec_char_ptr_clear_and_freeowned(&dir_entries);
@@ -443,9 +437,7 @@ static char *maybe_divert_path(const char *path,
     size_t prefix_strlen = strlen(src_prefix);
     if (strncmp(path, src_prefix, prefix_strlen) == 0 &&
         (path[prefix_strlen] == '/' || path[prefix_strlen] == '\0')) {
-      char *out;
-      asprintf(&out, "%s%s", dest_prefix, path + prefix_strlen);
-      return out;
+      return joinstr2(dest_prefix, path + prefix_strlen);
     }
   }
   return strdup(path);
@@ -490,7 +482,7 @@ ErrVal fsops_emit_install_package(
     free(pZip);
     return ERR_UNKNOWN;
   }
-  fileclaims_collect(pZip, "install", package, &claims);
+  fileclaims_collect(pZip, "install", package, sysroot, &claims);
   defer fileclaims_delete(&claims);
 
   vec_fsop_t pkfsops;
@@ -524,8 +516,8 @@ ErrVal fsops_emit_install_package(
     bool matchesus;
     bool matchesother;
     char *otherpackage = NULL;
-    compute_match_status(index, "install", package, sysroot, path, claim,
-                         &exists, &matchesus, &matchesother, &otherpackage);
+    compute_match_status(index, "install", package, path, claim, &exists,
+                         &matchesus, &matchesother, &otherpackage);
 
     if (exists) {
       if (matchesus) {
@@ -538,9 +530,8 @@ ErrVal fsops_emit_install_package(
         should_not_install = true;
       } else {
         if (in_protected_paths(protected_paths, path)) {
-          if (fsops_emit_rm_rf("install", package,
-                               mkfullpath(sysroot, path, ".zpknew"), &pkfsops,
-                               index) != ERR_OK) {
+          if (fsops_emit_rm_rf("install", package, joinstr2(path, ".zpknew"),
+                               &pkfsops, index) != ERR_OK) {
             should_not_install = true;
             continue;
           }
@@ -549,14 +540,12 @@ ErrVal fsops_emit_install_package(
               "install %s: installing new %s as %s.zpknew (no match + "
               "in protected path)",
               package, path, path);
-          fsops_emit_install("install", package,
-                             mkfullpath(sysroot, path, ".zpknew"), claim, pZip,
-                             &pkfsops, index);
+          fsops_emit_install("install", package, joinstr2(path, ".zpknew"),
+                             claim, pZip, &pkfsops, index);
 
           // emit diversion for future files
           char *src = strdup(path);
-          char *dest;
-          asprintf(&dest, "%s%s", path, ".zpknew");
+          char *dest = joinstr2(path, ".zpknew");
           vec_char_ptr_push(&src_diverted_prefixes, &src);
           vec_char_ptr_push(&dest_diverted_prefixes, &dest);
         } else {
@@ -565,21 +554,20 @@ ErrVal fsops_emit_install_package(
               "install %s: renaming old %s to %s.zpksave (no match + "
               "not in protected path)",
               package, path, path);
-          if (fsops_emit_rm_rf("install", package,
-                               mkfullpath(sysroot, path, ".zpksave"), &pkfsops,
-                               index) != ERR_OK) {
+          if (fsops_emit_rm_rf("install", package, joinstr2(path, ".zpksave"),
+                               &pkfsops, index) != ERR_OK) {
             should_not_install = true;
             continue;
           }
-          fsops_emit_mv("install", package, mkfullpath(sysroot, path, ""),
-                        mkfullpath(sysroot, path, ".zpksave"), &pkfsops, index);
-          fsops_emit_install("install", package, mkfullpath(sysroot, path, ""),
-                             claim, pZip, &pkfsops, index);
+          fsops_emit_mv("install", package, strdup(path),
+                        joinstr2(path, ".zpksave"), &pkfsops, index);
+          fsops_emit_install("install", package, strdup(path), claim, pZip,
+                             &pkfsops, index);
         }
       }
     } else {
-      fsops_emit_install("install", package, mkfullpath(sysroot, path, ""),
-                         claim, pZip, &pkfsops, index);
+      fsops_emit_install("install", package, strdup(path), claim, pZip,
+                         &pkfsops, index);
     }
   }
 
@@ -642,7 +630,7 @@ ErrVal fsops_emit_uninstall_package(
     return ERR_UNKNOWN;
   }
   llrb_char_ptr_fileclaim claims;
-  fileclaims_collect(pZip, "uninstall", package, &claims);
+  fileclaims_collect(pZip, "uninstall", package, sysroot, &claims);
   defer fileclaims_delete(&claims);
   mz_zip_reader_end(pZip);
   free(pZip);
@@ -662,8 +650,8 @@ ErrVal fsops_emit_uninstall_package(
     bool matchesus;
     bool matchesother;
     char *otherpackage = NULL;
-    compute_match_status(index, "uninstall", package, sysroot, path, claim,
-                         &exists, &matchesus, &matchesother, &otherpackage);
+    compute_match_status(index, "uninstall", package, path, claim, &exists,
+                         &matchesus, &matchesother, &otherpackage);
 
     if (exists) {
       if (matchesus) {
@@ -674,11 +662,10 @@ ErrVal fsops_emit_uninstall_package(
           // if it matches us and doesn't match other, it belongs to us and we
           // remove it
           if (claim.is_directory) {
-            fsops_emit_rmdir("uninstall", package,
-                             mkfullpath(sysroot, path, ""), &pkfsops, index);
+            fsops_emit_rmdir("uninstall", package, strdup(path), &pkfsops,
+                             index);
           } else {
-            fsops_emit_rm("uninstall", package, mkfullpath(sysroot, path, ""),
-                          &pkfsops, index);
+            fsops_emit_rm("uninstall", package, strdup(path), &pkfsops, index);
           }
         }
       } else if (matchesother) {
@@ -787,8 +774,7 @@ ErrVal resolve_package_paths(vec_char_ptr *package_paths,
       return ERR_NOSUCHFILE;
     }
 
-    char *package_path;
-    asprintf(&package_path, "%s/%s", best_repository, best_package_entry);
+    char *package_path = joinstr3(best_repository, "/", best_package_entry);
     vec_char_ptr_push(package_paths, &package_path);
   }
 

@@ -1,7 +1,16 @@
-TARGET_EXEC ?= zpk
+TARGET_NAME ?= zpk
 
-BUILD_DIR ?= ./build
-SRC_DIRS ?= src vendor
+ifeq ($(OS),Windows_NT)
+HOST := windows
+else
+HOST := posix
+endif
+
+# target defaults to HOST, do `make PLATFORM=windows` for cross-compiling.
+PLATFORM ?= $(HOST)
+
+BUILD_DIR ?= ./build/$(PLATFORM)
+SRC_DIRS ?= src vendor platsrc/$(PLATFORM)
 
 SRCS := $(shell find $(SRC_DIRS) -type f -name *.c)
 OBJS := $(SRCS:%=$(BUILD_DIR)/%.o)
@@ -11,14 +20,25 @@ INC_FLAGS := $(addprefix -I,$(INC_DIRS))
 
 DEFINES := -DMZ_PLATFORM=0 -DMINIZ_NO_ZLIB_COMPATIBLE_NAMES
 
-LDFLAGS := -lm -lpthread -fsanitize=address 
+LDFLAGS := -lm 
 
 CC := clang
 CFLAGS ?= $(INC_FLAGS) $(DEFINES) -std=c2y -fdefer-ts -MMD -MP -O0 -g3 -Wall -Weverything -pedantic \
  -Wno-padded -Wno-switch-enum -Wno-declaration-after-statement -Wno-unsafe-buffer-usage \
  -Wno-implicit-void-ptr-cast -Wno-pre-c2y-compat -Wno-pre-c23-compat -Wno-pre-c11-compat \
- -Wno-switch-default \
- -fsanitize=address
+ -Wno-switch-default
+
+
+ifeq ($(PLATFORM),windows)
+CROSSFLAGS := --target=x86_64-w64-windows-gnu
+CFLAGS += $(CROSSFLAGS)
+LDFLAGS += $(CROSSFLAGS)
+endif
+
+ifeq ($(PLATFORM),posix)
+CFLAGS  += -fsanitize=address
+LDFLAGS += -fsanitize=address
+endif
 
 
 $(BUILD_DIR)/vendor/apkver/%.c.o: CFLAGS += -Wno-variadic-macros \
@@ -29,6 +49,12 @@ $(BUILD_DIR)/vendor/miniz/%.c.o: CFLAGS += -D_DEFAULT_SOURCE \
  -Wno-cast-qual -Wno-unused-macros -Wno-switch-default -Wno-covered-switch-default
 
 $(BUILD_DIR)/vendor/llrb/%.c.o: CFLAGS += -Wno-variadic-macros -Wno-unused-function 
+
+ifeq ($(PLATFORM),windows)
+TARGET_EXEC ?= $(TARGET_NAME).exe 
+else
+TARGET_EXEC ?= $(TARGET_NAME)
+endif
 
 $(BUILD_DIR)/$(TARGET_EXEC): $(OBJS)
 	$(CC) $(OBJS) -o $@ $(LDFLAGS)
