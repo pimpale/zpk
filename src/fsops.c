@@ -6,7 +6,6 @@
 #include <string.h>
 #include <time.h>
 
-#include "apkver/apkver.h"
 #include "error.h"
 #include "fsop.h"
 #include "fsops.h"
@@ -444,6 +443,8 @@ static char *maybe_divert_path(const char *path,
 }
 
 ErrVal fsops_emit_install_package(
+    //
+    const char *op,
     // appends to this if the operation would succeed
     vec_fsop_t *fsops,
     // fsops refer to indexes in the zips. appends to this if the operation
@@ -456,13 +457,16 @@ ErrVal fsops_emit_install_package(
     // where to install
     char *sysroot,
     // protected paths
-    vec_char_ptr *protected_paths) {
+    vec_char_ptr *protected_paths,
+    // refuse to proceed if a duplicate exists
+    bool flag_duplicate) {
 
   char *package = basename_m(package_path);
   assert(package != NULL);
 
   bool changed_during_transaction = false;
-  if (fileindex_contains_package(index, package, &changed_during_transaction)) {
+  if (flag_duplicate &&
+      fileindex_contains_package(index, package, &changed_during_transaction)) {
     LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "install %s: package %s %s", package,
                    package,
                    changed_during_transaction
@@ -475,14 +479,13 @@ ErrVal fsops_emit_install_package(
   mz_zip_archive *pZip = malloc(sizeof(mz_zip_archive));
   mz_zip_zero_struct(pZip);
   if (!mz_zip_reader_init_file(pZip, package_path, 0)) {
-    LOG_ERROR_ARGS(ERR_LEVEL_ERROR,
-                   "install %s: could not open zip archive %s: %s", package,
-                   package_path,
+    LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "%s %s: could not open zip archive %s: %s",
+                   op, package, package_path,
                    mz_zip_get_error_string(mz_zip_get_last_error(pZip)));
     free(pZip);
     return ERR_UNKNOWN;
   }
-  fileclaims_collect(pZip, "install", package, sysroot, &claims);
+  fileclaims_collect(pZip, op, package, sysroot, &claims);
   defer fileclaims_delete(&claims);
 
   vec_fsop_t pkfsops;
@@ -516,32 +519,30 @@ ErrVal fsops_emit_install_package(
     bool matchesus;
     bool matchesother;
     char *otherpackage = NULL;
-    compute_match_status(index, "install", package, path, claim, &exists,
-                         &matchesus, &matchesother, &otherpackage);
+    compute_match_status(index, op, package, path, claim, &exists, &matchesus,
+                         &matchesother, &otherpackage);
 
     if (exists) {
       if (matchesus) {
         // already exists and matches us, do nothing
       } else if (matchesother) {
-        LOG_ERROR_ARGS(
-            ERR_LEVEL_ERROR,
-            "install %s: file conflict on %s: file exists and matches %s",
-            package, path, otherpackage);
+        LOG_ERROR_ARGS(ERR_LEVEL_ERROR,
+                       "%s %s: file conflict on %s: file exists and matches %s",
+                       op, package, path, otherpackage);
         should_not_install = true;
       } else {
         if (in_protected_paths(protected_paths, path)) {
-          if (fsops_emit_rm_rf("install", package, joinstr2(path, ".zpknew"),
-                               &pkfsops, index) != ERR_OK) {
+          if (fsops_emit_rm_rf(op, package, joinstr2(path, ".zpknew"), &pkfsops,
+                               index) != ERR_OK) {
             should_not_install = true;
             continue;
           }
-          LOG_ERROR_ARGS(
-              ERR_LEVEL_WARN,
-              "install %s: installing new %s as %s.zpknew (no match + "
-              "in protected path)",
-              package, path, path);
-          fsops_emit_install("install", package, joinstr2(path, ".zpknew"),
-                             claim, pZip, &pkfsops, index);
+          LOG_ERROR_ARGS(ERR_LEVEL_WARN,
+                         "%s %s: installing new %s as %s.zpknew (no match + "
+                         "in protected path)",
+                         op, package, path, path);
+          fsops_emit_install(op, package, joinstr2(path, ".zpknew"), claim,
+                             pZip, &pkfsops, index);
 
           // emit diversion for future files
           char *src = strdup(path);
@@ -549,25 +550,24 @@ ErrVal fsops_emit_install_package(
           vec_char_ptr_push(&src_diverted_prefixes, &src);
           vec_char_ptr_push(&dest_diverted_prefixes, &dest);
         } else {
-          LOG_ERROR_ARGS(
-              ERR_LEVEL_WARN,
-              "install %s: renaming old %s to %s.zpksave (no match + "
-              "not in protected path)",
-              package, path, path);
-          if (fsops_emit_rm_rf("install", package, joinstr2(path, ".zpksave"),
+          LOG_ERROR_ARGS(ERR_LEVEL_WARN,
+                         "%s %s: renaming old %s to %s.zpksave (no match + "
+                         "not in protected path)",
+                         op, package, path, path);
+          if (fsops_emit_rm_rf(op, package, joinstr2(path, ".zpksave"),
                                &pkfsops, index) != ERR_OK) {
             should_not_install = true;
             continue;
           }
-          fsops_emit_mv("install", package, strdup(path),
-                        joinstr2(path, ".zpksave"), &pkfsops, index);
-          fsops_emit_install("install", package, strdup(path), claim, pZip,
-                             &pkfsops, index);
+          fsops_emit_mv(op, package, strdup(path), joinstr2(path, ".zpksave"),
+                        &pkfsops, index);
+          fsops_emit_install(op, package, strdup(path), claim, pZip, &pkfsops,
+                             index);
         }
       }
     } else {
-      fsops_emit_install("install", package, strdup(path), claim, pZip,
-                         &pkfsops, index);
+      fsops_emit_install(op, package, strdup(path), claim, pZip, &pkfsops,
+                         index);
     }
   }
 
@@ -591,11 +591,10 @@ ErrVal fsops_emit_install_package(
 }
 
 ErrVal fsops_emit_uninstall_package(
+    //
+    const char *op,
     // appends to this if the operation would succeed
     vec_fsop_t *fsops,
-    // fsops refer to indexes in the zips. appends to this if the operation
-    // would succeed
-    vec_mz_zip_archive_ptr *zips,
     // file index (for file conflict identification)
     fileindex_t *index,
     // zip file to uninstall
@@ -611,7 +610,7 @@ ErrVal fsops_emit_uninstall_package(
   bool changed_during_transaction = false;
   if (!fileindex_contains_package(index, package,
                                   &changed_during_transaction)) {
-    LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "uninstall %s: package %s %s", package,
+    LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "%s %s: package %s %s", op, package,
                    package,
                    changed_during_transaction
                        ? "would be uninstalled earlier during this transaction"
@@ -622,15 +621,14 @@ ErrVal fsops_emit_uninstall_package(
   mz_zip_archive *pZip = malloc(sizeof(mz_zip_archive));
   mz_zip_zero_struct(pZip);
   if (!mz_zip_reader_init_file(pZip, package_path, 0)) {
-    LOG_ERROR_ARGS(ERR_LEVEL_ERROR,
-                   "uninstall %s: could not open zip archive %s: %s", package,
-                   package_path,
+    LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "%s %s: could not open zip archive %s: %s",
+                   op, package, package_path,
                    mz_zip_get_error_string(mz_zip_get_last_error(pZip)));
     free(pZip);
     return ERR_UNKNOWN;
   }
   llrb_char_ptr_fileclaim claims;
-  fileclaims_collect(pZip, "uninstall", package, sysroot, &claims);
+  fileclaims_collect(pZip, op, package, sysroot, &claims);
   defer fileclaims_delete(&claims);
   mz_zip_reader_end(pZip);
   free(pZip);
@@ -650,8 +648,8 @@ ErrVal fsops_emit_uninstall_package(
     bool matchesus;
     bool matchesother;
     char *otherpackage = NULL;
-    compute_match_status(index, "uninstall", package, path, claim, &exists,
-                         &matchesus, &matchesother, &otherpackage);
+    compute_match_status(index, op, package, path, claim, &exists, &matchesus,
+                         &matchesother, &otherpackage);
 
     if (exists) {
       if (matchesus) {
@@ -662,25 +660,24 @@ ErrVal fsops_emit_uninstall_package(
           // if it matches us and doesn't match other, it belongs to us and we
           // remove it
           if (claim.is_directory) {
-            fsops_emit_rmdir("uninstall", package, strdup(path), &pkfsops,
-                             index);
+            fsops_emit_rmdir(op, package, strdup(path), &pkfsops, index);
           } else {
-            fsops_emit_rm("uninstall", package, strdup(path), &pkfsops, index);
+            fsops_emit_rm(op, package, strdup(path), &pkfsops, index);
           }
         }
       } else if (matchesother) {
         LOG_ERROR_ARGS(ERR_LEVEL_WARN,
-                       "uninstall %s: file %s seems to match %s instead of "
+                       "%s %s: file %s seems to match %s instead of "
                        "this package. Leaving in place.",
-                       package, path, otherpackage);
+                       op, package, path, otherpackage);
       } else {
         LOG_ERROR_ARGS(ERR_LEVEL_WARN,
-                       "uninstall %s: file %s does not match any package. "
+                       "%s %s: file %s does not match any package. "
                        "Leaving in place.",
-                       package, path);
+                       op, package, path);
       }
     } else {
-      LOG_ERROR_ARGS(ERR_LEVEL_WARN, "uninstall %s: file %s is already missing",
+      LOG_ERROR_ARGS(ERR_LEVEL_WARN, "%s %s: file %s is already missing", op,
                      package, path);
     }
   }
@@ -690,93 +687,5 @@ ErrVal fsops_emit_uninstall_package(
   // if all good transfer ownership of newly created pkgs
   vec_fsop_t_append(fsops, &pkfsops);
   vec_fsop_t_clear(&pkfsops);
-  return ERR_OK;
-}
-
-ErrVal resolve_package_paths(vec_char_ptr *package_paths,
-                             const vec_char_ptr *repositories,
-                             const vec_char_ptr *packages) {
-  size_t n_targets = vec_char_ptr_len(packages);
-
-  // fetch a list of the packages in the repositories
-  size_t n_repositories = vec_char_ptr_len(repositories);
-
-  vec_char_ptr *entries =
-      (vec_char_ptr *)malloc(sizeof(vec_char_ptr) * n_repositories);
-  for (size_t i = 0; i < n_repositories; i++) {
-    vec_char_ptr_init(&entries[i]);
-  }
-  defer {
-    for (size_t i = 0; i < n_repositories; i++) {
-      vec_char_ptr_delete_and_freeowned(&entries[i]);
-    }
-    free(entries);
-  }
-
-  for (size_t i = 0; i < n_repositories; i++) {
-    char *repository = *vec_char_ptr_at(repositories, i);
-    LOG_ERROR_ARGS(ERR_LEVEL_INFO, "resolve: listing files in %s", repository);
-    if (listdir_portable(repository, &entries[i], NULL) != 0) {
-      LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "resolve: unable to list files in %s: %s",
-                     repository, strerror(errno));
-      return ERR_NOSUCHFILE;
-    }
-  }
-
-  for (size_t i = 0; i < n_targets; i++) {
-    char *package = *vec_char_ptr_at(packages, i);
-    size_t package_strlen = strlen(package);
-
-    char *best_package_entry = NULL;
-    char *best_repository = NULL;
-    apk_blob_t best_package_entry_version = {};
-
-    for (size_t r = 0; r < n_repositories; r++) {
-      char *repository = *vec_char_ptr_at(repositories, r);
-      size_t n_entries = vec_char_ptr_len(&entries[r]);
-      for (size_t e = 0; e < n_entries; e++) {
-        char *entry = *vec_char_ptr_at(&entries[r], e);
-        size_t entry_strlen = strlen(entry);
-        if (!endswith(entry, ".zip")) {
-          continue;
-        }
-        if (!(package_strlen + 1 < entry_strlen &&
-              entry[package_strlen] == '-' &&
-              strncmp(entry, package, package_strlen) == 0)) {
-          continue;
-        }
-        // // pointer to the first char in the .zip suffix
-        char *end = entry + (strlen(entry) - strlen(".zip"));
-        // the char after the hyphen
-        char *vstart = entry + package_strlen + 1;
-        apk_blob_t candidate_version = APK_BLOB_PTR_LEN(vstart, end - vstart);
-
-        if (!apk_version_validate(candidate_version)) {
-          continue;
-        }
-
-        if (best_package_entry == NULL ||
-            apk_version_compare(candidate_version,
-                                best_package_entry_version) ==
-                APK_VERSION_GREATER) {
-          best_package_entry = entry;
-          best_repository = repository;
-          best_package_entry_version = candidate_version;
-        }
-      }
-    }
-
-    if (best_package_entry == NULL) {
-      LOG_ERROR_ARGS(
-          ERR_LEVEL_ERROR,
-          "resolve: did not find validly named package %s in any repository",
-          package);
-      return ERR_NOSUCHFILE;
-    }
-
-    char *package_path = joinstr3(best_repository, "/", best_package_entry);
-    vec_char_ptr_push(package_paths, &package_path);
-  }
-
   return ERR_OK;
 }

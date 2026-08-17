@@ -3,14 +3,8 @@
 
 #include "error.h"
 #include "index.h"
-#include "instances/vec_char_ptr.h"
 #include "instances/vec_fsop_t.h"
 #include "instances/vec_mz_zip_archive_ptr.h"
-
-// function appends to `package_paths`.
-ErrVal resolve_package_paths(vec_char_ptr *package_paths,
-                             const vec_char_ptr *repositories,
-                             const vec_char_ptr *packages);
 
 void fsops_emit_mkdir(
     // for logging only
@@ -72,6 +66,8 @@ ErrVal fsops_emit_rm_rf(const char *op, const char *pkg,
                         fileindex_t *index);
 
 ErrVal fsops_emit_install_package(
+    // install can be called as either a "fix", or "install" operation
+    const char* op,
     // appends to this if the operation would succeed
     vec_fsop_t *fsops,
     // fsops refer to indexes in the zips. appends to this if the operation
@@ -84,14 +80,15 @@ ErrVal fsops_emit_install_package(
     // where to install
     char *sysroot,
     // protected paths
-    vec_char_ptr *protected_paths);
+    vec_char_ptr *protected_paths,
+    // refuse to proceed if a duplicate exists
+    bool flag_duplicate
+);
 
 ErrVal fsops_emit_uninstall_package(
+    const char* op,
     // appends to this if the operation would succeed
     vec_fsop_t *fsops,
-    // fsops refer to indexes in the zips. appends to this if the operation
-    // would succeed
-    vec_mz_zip_archive_ptr *zips,
     // file index (for file conflict identification)
     fileindex_t *index,
     // zip file to uninstall

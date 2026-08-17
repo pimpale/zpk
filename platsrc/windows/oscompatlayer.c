@@ -157,6 +157,11 @@ char *abspath_portable(const char *path) {
                    path);
     PANIC();
   }
+  // strip trailing \ if it has one
+  size_t len = strlen(full);
+  if(full[len-1] == '\\') {
+    full[len-1] = '\0';
+  } 
   backslashes_to_slashes(full);
   return full;
 }

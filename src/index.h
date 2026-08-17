@@ -15,7 +15,7 @@ typedef struct {
 } fileindex_t;
 
 // file index manipulation ops
-void fileindex_build(fileindex_t *index, const char* sysroot, char *pkgs_path);
+ErrVal fileindex_build(fileindex_t *index, const char* sysroot, char *pkgs_path);
 void fileindex_delete(fileindex_t *index);
 
 bool fileindex_contains_package(fileindex_t *index, char *package_basename,

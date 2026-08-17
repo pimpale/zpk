@@ -9,8 +9,10 @@
 #include "index.h"
 #include "instances/llrb_char_ptr_packagedata.h"
 #include "instances/llrb_path_filestatus.h"
+#include "instances/vec_char_ptr.h"
 #include "oscompatlayer.h"
 #include "pathutils.h"
+#include "repository.h"
 
 // free a claims tree including its path keys
 void fileclaims_delete(llrb_char_ptr_fileclaim *claims) {
@@ -235,7 +237,7 @@ void remove_claims_from_index(fileindex_t *fileindex, char *package,
 // the files in it
 // only_installed (mandatory for now) only builds the index with installed files
 // (useful for ownership tests)
-void fileindex_build(fileindex_t *fileindex, const char *sysroot,
+ErrVal fileindex_build(fileindex_t *fileindex, const char *sysroot,
                      char *pkgs_path) {
   llrb_char_ptr_packagedata *packages = &fileindex->packages;
   llrb_char_ptr_packagedata_new(packages);
@@ -247,26 +249,16 @@ void fileindex_build(fileindex_t *fileindex, const char *sysroot,
   llrb_path_filestatus_new(statuses);
 
   // first list files in the pkgs path:
-  vec_char_ptr entries;
-  vec_char_ptr_init(&entries);
-  defer vec_char_ptr_delete_and_freeowned(&entries);
+  vec_char_ptr packages_path;
+  vec_char_ptr_init(&packages_path);
+  defer vec_char_ptr_delete_and_freeowned(&packages_path);
 
-  if (listdir_portable(pkgs_path, &entries, NULL) != 0) {
-    LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "index: unable to list files in %s: %s",
-                   pkgs_path, strerror(errno));
-    return;
+  if(resolve_package_paths_installed(&packages_path, pkgs_path, NULL, true) != ERR_OK) {
+    return ERR_UNKNOWN;
   }
 
-  for (size_t i = 0; i < vec_char_ptr_len(&entries); i++) {
-    char *entry = *vec_char_ptr_at(&entries, i);
-    if (!endswith(entry, ".zip")) {
-      continue;
-    }
-
-    char *package_path;
-    asprintf(&package_path, "%s/%s", pkgs_path, entry);
-    defer free(package_path);
-
+  for (size_t i = 0; i < vec_char_ptr_len(&packages_path); i++) {
+    char* package_path = *vec_char_ptr_at(&packages_path, i);
     mz_zip_archive zip;
     mz_zip_zero_struct(&zip);
     defer mz_zip_reader_end(&zip);
@@ -276,12 +268,13 @@ void fileindex_build(fileindex_t *fileindex, const char *sysroot,
                      mz_zip_get_error_string(mz_zip_get_last_error(&zip)));
       continue;
     }
-
+    char* entry = basename_m(package_path);
     llrb_char_ptr_fileclaim claims;
     fileclaims_collect(&zip, "index", entry, sysroot, &claims);
     merge_claims_into_index(fileindex, entry, &claims, false);
     fileclaims_delete(&claims);
   }
+  return ERR_OK;
 }
 
 // computes the whole-file crc32 into *out. op/pkg are only for log context and
