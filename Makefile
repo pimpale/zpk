@@ -40,6 +40,10 @@ CFLAGS  += -fsanitize=address
 LDFLAGS += -fsanitize=address
 endif
 
+# c source
+$(BUILD_DIR)/%.c.o: %.c
+	$(MKDIR_P) $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/vendor/apkver/%.c.o: CFLAGS += -Wno-variadic-macros \
  -Wno-implicit-fallthrough -Wno-sign-compare -Wno-gnu-case-range
@@ -47,6 +51,9 @@ $(BUILD_DIR)/vendor/apkver/%.c.o: CFLAGS += -Wno-variadic-macros \
 $(BUILD_DIR)/vendor/miniz/%.c.o: CFLAGS += -D_DEFAULT_SOURCE \
  -Wno-sign-conversion -Wno-comma -Wno-extra-semi-stmt -Wno-implicit-int-conversion \
  -Wno-cast-qual -Wno-unused-macros -Wno-switch-default -Wno-covered-switch-default
+
+$(BUILD_DIR)/vendor/bearssl/%.c.o: CFLAGS += \
+ -Ivendor/bearssl/inc -Ivendor/bearssl/src -w
 
 $(BUILD_DIR)/vendor/llrb/%.c.o: CFLAGS += -Wno-variadic-macros -Wno-unused-function 
 
@@ -58,11 +65,6 @@ endif
 
 $(BUILD_DIR)/$(TARGET_EXEC): $(OBJS)
 	$(CC) $(OBJS) -o $@ $(LDFLAGS)
-
-# c source
-$(BUILD_DIR)/%.c.o: %.c
-	$(MKDIR_P) $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
 
 .PHONY: clean
 clean:
