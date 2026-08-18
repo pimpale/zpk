@@ -7,6 +7,7 @@
 
 #include "error.h"
 #include "index.h"
+#include "instances/llrb_char_ptr_fileclaim.h"
 #include "instances/llrb_char_ptr_packagedata.h"
 #include "instances/llrb_path_filestatus.h"
 #include "instances/vec_char_ptr.h"
@@ -133,9 +134,10 @@ bool fileindex_contains_package(fileindex_t *fileindex, char *package,
 // move every claim into the shared index as `package`'s IndexDataEntry,
 // consuming the tree: each path key is either handed to the index or freed.
 // on return `claims` is empty (but not deleted!)
-ErrVal merge_claims_into_index(fileindex_t *fileindex, const char *package,
-                               llrb_char_ptr_fileclaim *claims,
-                               bool simulate_installed) {
+// if the package already exists, don't crash
+void merge_claims_into_index(fileindex_t *fileindex, const char *package,
+                             llrb_char_ptr_fileclaim *claims,
+                             bool simulate_installed) {
 
   {
     llrb_char_ptr_packagedata *packages = &fileindex->packages;
@@ -156,11 +158,7 @@ ErrVal merge_claims_into_index(fileindex_t *fileindex, const char *package,
           packages, &owned_package_basename, &packagedata_cur);
       assert(got_ref);
 
-      if (packagedata_cur->installed) {
-        return ERR_UNKNOWN;
-      }
-
-      // now set the current value of the packagedata
+      // now set the current value of the packagedata, overwriting
       packagedata_cur->installed = true;
       packagedata_cur->changed_during_transaction = simulate_installed;
     }
@@ -184,13 +182,16 @@ ErrVal merge_claims_into_index(fileindex_t *fileindex, const char *package,
       free(path);
     }
     char *key = strdup(package);
-    // duplicate package path should have been caught earlier
-    bool inserted =
-        llrb_char_ptr_fileclaim_insert(&data->claims, &key, &claim) != NULL;
-    assert(inserted);
+    if (llrb_char_ptr_fileclaim_insert(&data->claims, &key, &claim) == NULL) {
+      // if the entry is already there, overwrite its data
+      FileClaim *pClaim;
+      bool got = llrb_char_ptr_fileclaim_get_ref(&data->claims, &key, &pClaim);
+      assert(got);
+      free(key);
+      *pClaim = claim;
+    }
   }
   llrb_char_ptr_fileclaim_clear(claims);
-  return ERR_OK;
 }
 
 // remove all claims from the index (if they exist). Doesn't error if they're
@@ -238,7 +239,7 @@ void remove_claims_from_index(fileindex_t *fileindex, char *package,
 // only_installed (mandatory for now) only builds the index with installed files
 // (useful for ownership tests)
 ErrVal fileindex_build(fileindex_t *fileindex, const char *sysroot,
-                     char *pkgs_path) {
+                       char *pkgs_path) {
   llrb_char_ptr_packagedata *packages = &fileindex->packages;
   llrb_char_ptr_packagedata_new(packages);
 
@@ -253,12 +254,13 @@ ErrVal fileindex_build(fileindex_t *fileindex, const char *sysroot,
   vec_char_ptr_init(&packages_path);
   defer vec_char_ptr_delete_and_freeowned(&packages_path);
 
-  if(resolve_package_paths_installed(&packages_path, pkgs_path, NULL, true) != ERR_OK) {
+  if (resolve_package_paths_installed(&packages_path, pkgs_path, NULL, true) !=
+      ERR_OK) {
     return ERR_UNKNOWN;
   }
 
   for (size_t i = 0; i < vec_char_ptr_len(&packages_path); i++) {
-    char* package_path = *vec_char_ptr_at(&packages_path, i);
+    char *package_path = *vec_char_ptr_at(&packages_path, i);
     mz_zip_archive zip;
     mz_zip_zero_struct(&zip);
     defer mz_zip_reader_end(&zip);
@@ -268,7 +270,7 @@ ErrVal fileindex_build(fileindex_t *fileindex, const char *sysroot,
                      mz_zip_get_error_string(mz_zip_get_last_error(&zip)));
       continue;
     }
-    char* entry = basename_m(package_path);
+    char *entry = basename_m(package_path);
     llrb_char_ptr_fileclaim claims;
     fileclaims_collect(&zip, "index", entry, sysroot, &claims);
     merge_claims_into_index(fileindex, entry, &claims, false);

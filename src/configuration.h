@@ -53,6 +53,7 @@ typedef struct {
       bool installed;
       bool upgradable;
       bool available;
+      bool orphaned;
     } list;
     struct {
       char *path;

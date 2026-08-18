@@ -357,7 +357,7 @@ static const char *USAGE =
     "  fetch [-o DIR] <pkg>...  download packages without installing\n"
     "  upgrade [pkg...]         upgrade packages (all if none given)\n"
     "  fix [pkg...]             reinstall broken packages (all if none given)\n"
-    "  list [-I] [-u] [-a]      list installed/upgradable/available packages\n"
+    "  list [-I] [-u] [-a] [-O] list installed/upgradable/available/orphaned packages\n"
     "  info -W <path>           show which package owns a path\n"
     "\n"
     "global options:\n"
@@ -432,6 +432,7 @@ void parse_args(int argc, char **argv, ZpkConfiguration *config,
   bool list_installed = false;
   bool list_upgradable = false;
   bool list_available = false;
+  bool list_orphaned = false;
   bool info_who_owns = false;
   bool have_op = false;
   bool no_more_options = false;
@@ -489,6 +490,9 @@ void parse_args(int argc, char **argv, ZpkConfiguration *config,
       list_upgradable = true;
     } else if (have_op && kind == ZPK_OP_LIST &&
                (strcmp(arg, "-a") == 0 || strcmp(arg, "--available") == 0)) {
+      list_available = true;
+      } else if (have_op && kind == ZPK_OP_LIST &&
+               (strcmp(arg, "-O") == 0 || strcmp(arg, "--orphaned") == 0)) {
       list_available = true;
     } else if (have_op && kind == ZPK_OP_OWNER &&
                (strcmp(arg, "-W") == 0 || strcmp(arg, "--who-owns") == 0)) {
@@ -566,12 +570,10 @@ void parse_args(int argc, char **argv, ZpkConfiguration *config,
     break;
   case ZPK_OP_LIST:
     // bare `list` means everything, like apk
-    if (!list_installed && !list_upgradable && !list_available) {
-      list_available = true;
-    }
     op->list.installed = list_installed;
     op->list.upgradable = list_upgradable;
     op->list.available = list_available;
+    op->list.orphaned = list_orphaned;
     vec_char_ptr_delete(&targets);
     break;
   }

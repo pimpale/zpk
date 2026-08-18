@@ -38,7 +38,7 @@ void fileclaims_collect(mz_zip_archive *zip,
 void fileclaims_delete(llrb_char_ptr_fileclaim *claims);
 
 // claim-tree file-index interactions
-ErrVal merge_claims_into_index(fileindex_t *index, const char *package,
+void merge_claims_into_index(fileindex_t *index, const char *package,
                                llrb_char_ptr_fileclaim *claims,
                                bool simulate_installed);
 

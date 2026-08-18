@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "configuration.h"
 #include "error.h"
@@ -66,8 +67,8 @@ static int do_add(ZpkConfiguration *pConf, vec_char_ptr *packages,
     // journal intent by moving the thing first. Then we can patch it up. if
     // there's a crash.
     fsops_emit_cp("install", basename_m(package_path), strdup(package_path),
-                  joinpath(pConf->pkgs_path, basename_m(package_path)),
-                  &fsops, &index);
+                  joinpath(pConf->pkgs_path, basename_m(package_path)), &fsops,
+                  &index);
 
     ErrVal err = fsops_emit_install_package("install", &fsops, &zips, &index,
                                             package_path, pConf->sysroot,
@@ -205,11 +206,19 @@ static int do_fix(ZpkConfiguration *pConf, vec_char_ptr *packages,
 }
 
 static int do_list(ZpkConfiguration *pConf, bool installed, bool upgradable,
-                   bool available) {
-  (void)pConf;
-  (void)installed;
-  (void)upgradable;
-  (void)available;
+                   bool available, bool orphaned) {
+  vec_char_ptr installed_package_paths;
+  vec_char_ptr_init(&installed_package_paths);
+  resolve_package_paths_installed(&installed_package_paths, pConf->pkgs_path,
+                                  NULL, true);
+
+  vec_char_ptr available_package_paths;
+  vec_char_ptr_init(&available_package_paths);
+  resolve_package_paths_repositories(&available_package_paths,
+                                     &pConf->repositories, NULL, true);
+
+  // TODO: apply filters and such
+
   return 0;
 }
 
@@ -261,7 +270,8 @@ int main(int argc, char **argv) {
     return do_fix(&configuration, &operation.fix.targets, operation.dry_run);
   case ZPK_OP_LIST:
     return do_list(&configuration, operation.list.installed,
-                   operation.list.upgradable, operation.list.available);
+                   operation.list.upgradable, operation.list.available,
+                   operation.list.orphaned);
   case ZPK_OP_OWNER:
     return do_owner(&configuration, operation.owner.path);
   }

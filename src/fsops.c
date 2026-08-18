@@ -583,10 +583,7 @@ ErrVal fsops_emit_install_package(
   vec_mz_zip_archive_ptr_push(zips, &pZip);
 
   // add to index
-  // must work because we already checked that package_path was not in the index
-  ErrVal merge_result = merge_claims_into_index(index, package, &claims, true);
-  assert(merge_result == ERR_OK);
-
+  merge_claims_into_index(index, package, &claims, true);
   return ERR_OK;
 }
 
