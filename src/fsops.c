@@ -400,14 +400,14 @@ ErrVal fsops_emit_rm_rf(const char *op, const char *pkg,
     // delete mere files
     for (size_t i = 0; i < vec_char_ptr_len(&file_entries); i++) {
       char *entry = *vec_char_ptr_at(&file_entries, i);
-      fsops_emit_rm(op, pkg, joinstr3(p, "/", entry), fsops, index);
+      fsops_emit_rm(op, pkg, joinpath(p, entry), fsops, index);
     }
     vec_char_ptr_clear_and_freeowned(&file_entries);
 
     // recurse into subfolders
     for (size_t i = 0; i < vec_char_ptr_len(&dir_entries); i++) {
       char *entry = *vec_char_ptr_at(&dir_entries, i);
-      char *subdir = joinstr3(p, "/", entry);
+      char *subdir = joinpath(p, entry);
       vec_char_ptr_push(&dirs_to_visit, &subdir);
     }
     vec_char_ptr_clear_and_freeowned(&dir_entries);

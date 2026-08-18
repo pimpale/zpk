@@ -37,7 +37,7 @@ static bool insert_file_claim(llrb_char_ptr_fileclaim *claims,
                               const char *sysroot,
                               // key pair to insert
                               char *path, const FileClaim *claim) {
-  char *fullpath = joinstr3(sysroot, "/", path);
+  char *fullpath = joinpath(sysroot, path);
   FileClaim *existing = NULL;
   if (!llrb_char_ptr_fileclaim_get_ref(claims, &fullpath, &existing)) {
     // the tree now owns `fullpath`

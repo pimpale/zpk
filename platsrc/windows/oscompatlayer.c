@@ -9,6 +9,7 @@
 
 #include "asprintf/asprintf.h"
 #include "oscompatlayer.h"
+#include "pathutils.h"
 
 // every path this shim hands back speaks '/' like the rest of the program;
 // the Win32 API accepts either separator, so nothing is lost by folding
@@ -21,7 +22,7 @@ static void backslashes_to_slashes(char *path) {
 }
 
 char *getenv_home_portable(void) {
-  char* home = strdup(getenv("USERPROFILE"));
+  char *home = strdup(getenv("USERPROFILE"));
   backslashes_to_slashes(home);
   return home;
 }
@@ -44,9 +45,7 @@ int mkdir_portable(const char *path, int mode) {
   return _mkdir(path);
 }
 
-int rmdir_portable(const char *path) {
-  return _rmdir(path);
-}
+int rmdir_portable(const char *path) { return _rmdir(path); }
 
 // maps a Win32 error code onto errno so callers can use strerror as usual
 static void set_errno_from_win32(DWORD error) {
@@ -157,11 +156,12 @@ char *abspath_portable(const char *path) {
                    path);
     PANIC();
   }
-  // strip trailing \ if it has one
+  // strip trailing \ if it has one unless it's a root path (eg C:\\)
   size_t len = strlen(full);
-  if(full[len-1] == '\\') {
-    full[len-1] = '\0';
-  } 
+  bool rootpath = len == 3 && endswith(full, ":\\");
+  if (!rootpath && full[len - 1] == '\\') {
+    full[len - 1] = '\0';
+  }
   backslashes_to_slashes(full);
   return full;
 }

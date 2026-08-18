@@ -19,6 +19,7 @@ void llrb_char_ptr_bestrepo_delete_and_freeowned(llrb_char_ptr_bestrepo *map) {
   while (llrb_char_ptr_bestrepo_iter_next(&iter, &key, &value)) {
     free(key);
     free(value.version);
+    free(value.entry);
   }
   llrb_char_ptr_bestrepo_delete(map);
 }

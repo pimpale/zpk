@@ -66,7 +66,7 @@ static int do_add(ZpkConfiguration *pConf, vec_char_ptr *packages,
     // journal intent by moving the thing first. Then we can patch it up. if
     // there's a crash.
     fsops_emit_cp("install", basename_m(package_path), strdup(package_path),
-                  joinstr3(pConf->pkgs_path, "/", basename_m(package_path)),
+                  joinpath(pConf->pkgs_path, basename_m(package_path)),
                   &fsops, &index);
 
     ErrVal err = fsops_emit_install_package("install", &fsops, &zips, &index,
@@ -201,6 +201,7 @@ static int do_fix(ZpkConfiguration *pConf, vec_char_ptr *packages,
   }
 
   execute_fsops(&fsops, dry_run);
+  return 0;
 }
 
 static int do_list(ZpkConfiguration *pConf, bool installed, bool upgradable,

@@ -92,6 +92,15 @@ char *normalize(const char *filename) {
   return out;
 }
 
+bool startswith(const char* str, const char* prefix) {
+  size_t len = strlen(str);
+  size_t prelen = strlen(prefix);
+  if(prelen > len) {
+    return false;
+  }
+  return strncmp(str, prefix, prelen) == 0;
+}
+
 bool endswith(const char *str, const char *suffix) {
   size_t len = strlen(str);
   size_t suflen = strlen(suffix);
@@ -122,7 +131,12 @@ char *joinstr2(const char *s1, const char *s2) {
   return result;
 }
 
-char *joinstr3(const char *s1, const char *s2, const char *s3) {
+char *joinpath(const char *s1, const char *s3) {
+  if(endswith(s1, "/")) {
+    return joinstr2(s1, s3);
+  }
+  const char* s2 = "/";
+  
   size_t len1 = strlen(s1);
   size_t len2 = strlen(s2);
   size_t len3 = strlen(s3);

@@ -59,7 +59,7 @@ bool package_data(
   }
   if (package_name != NULL) {
     *package_name =
-        strndup(entry, strlen(entry) - (version.len + strlen(suffix)));
+        strndup(entry, strlen(entry) - (1 + version.len + strlen(suffix)));
   }
   return true;
 }
@@ -69,7 +69,7 @@ ErrVal resolve_package_paths_installed(vec_char_ptr *package_paths,
                                        bool none_is_all) {
   vec_char_ptr installedrepo;
   vec_char_ptr_init(&installedrepo);
-  defer vec_char_ptr_delete_and_freeowned(&installedrepo);
+  defer vec_char_ptr_delete(&installedrepo);
   vec_char_ptr_push(&installedrepo, &directory);
   return resolve_package_paths_repositories(package_paths, &installedrepo,
                                             packages, none_is_all);
@@ -124,13 +124,16 @@ ErrVal resolve_package_paths_repositories(vec_char_ptr *package_paths,
 
       BestRepo *brp;
       if (!llrb_char_ptr_bestrepo_get_ref(&bestrepo, &entrypackagename, &brp)) {
-        BestRepo br = {.version = entryversion, .repository = repository};
+        BestRepo br = {.entry = *pEntry,
+                       .version = entryversion,
+                       .repository = repository};
         bool inserted = llrb_char_ptr_bestrepo_insert(
                             &bestrepo, &entrypackagename, &br) != NULL;
         assert(inserted);
         // take ownership of entryversion and entrypackagename
         entryversion = NULL;
         entrypackagename = NULL;
+        *pEntry = NULL;
 
       } else {
         if (apk_version_compare(APK_BLOB_STR(entryversion),
@@ -158,7 +161,7 @@ ErrVal resolve_package_paths_repositories(vec_char_ptr *package_paths,
     char *key;
     BestRepo br;
     while (llrb_char_ptr_bestrepo_iter_next(&iter, &key, &br)) {
-      char *package_path = joinstr3(br.repository, "/", br.entry);
+      char *package_path = joinpath(br.repository, br.entry);
       vec_char_ptr_push(package_paths, &package_path);
     }
   } else {
@@ -173,9 +176,10 @@ ErrVal resolve_package_paths_repositories(vec_char_ptr *package_paths,
             "resolve: did not find validly named package %s in any repository",
             package);
         should_error = true;
+        continue;
       }
 
-      char *package_path = joinstr3(br.repository, "/", br.entry);
+      char *package_path = joinpath(br.repository, br.entry);
       vec_char_ptr_push(package_paths, &package_path);
     }
     if (should_error) {
