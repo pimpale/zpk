@@ -97,8 +97,10 @@ size_t LLRB_FN(_len)(const LLRB_T *tree);
 void LLRB_FN(_iter_begin)(const LLRB_T *tree, LLRB_ITER_T *iter);
 bool LLRB_FN(_iter_next)(LLRB_ITER_T *iter, LLRB_KEY *key,
                          LLRB_VALUE *value);
+// The ref points into the tree: valid until the node is removed, and
+// mutating through it is only safe because iteration never rebalances.
 bool LLRB_FN(_iter_next_ref)(LLRB_ITER_T *iter, LLRB_KEY *key,
-                             const LLRB_VALUE **value);
+                             LLRB_VALUE **value);
 
 // Position the iterator at the first node with key >= *key (the lower
 // bound), so a subsequent _iter_next starts there.

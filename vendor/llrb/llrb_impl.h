@@ -468,14 +468,14 @@ bool LLRB_FN(_iter_next)(LLRB_ITER_T *iter, LLRB_KEY *key,
 }
 
 bool LLRB_FN(_iter_next_ref)(LLRB_ITER_T *iter, LLRB_KEY *key,
-                             const LLRB_VALUE **value) {
+                             LLRB_VALUE **value) {
   const LLRB_NODE_T *n = iter->node;
   if (n == NULL)
     return false;
   if (key != NULL)
     *key = n->key;
   if (value != NULL)
-    *value = &n->value;
+    *value = (LLRB_VALUE *)&n->value;
 
   if (n->right != NULL) {
     iter->node = LLRB_LOCAL(cmin)(n->right);

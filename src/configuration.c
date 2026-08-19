@@ -15,23 +15,20 @@ static const char *SYSTEM_CONFIG_PATH = "/etc/zpk.ini";
 static const char *USER_CONFIG_PATH = "~/.zpk.ini";
 static const char *CONFIGURATION_FILE_NAME = ".zpk.ini";
 
-// Resolves `raw` against the directory containing `config_path`, unless
-// `raw` is a URI (contains "://"), already absolute, or home-relative (~).
-// Returns a newly allocated string; caller must free.
+// allocates
 static char *resolve_config_relative(const char *config_path, const char *raw) {
   if (strstr(raw, "://") != NULL) {
     return strdup(raw);
   }
 
-  char *expanded = expandtilde(raw); // no-op unless raw starts with ~
+  char *expanded = expandtilde(raw);
   if (expanded[0] == '/') {
-    return expanded; // absolute already, or made absolute by ~ expansion
+    return expanded;
   }
 
   const char *last_slash = strrchr(config_path, '/');
   if (last_slash == NULL) {
-    // config_path was a bare filename (e.g. "zpk.ini"): its directory is
-    // cwd, and `expanded` is already interpreted relative to cwd as-is.
+    // config_path was a bare filename (e.g. "zpk.ini")
     return expanded;
   }
 
@@ -268,10 +265,6 @@ static void resolve_configuration(ZpkConfiguration *config,
   if (!cli_config) {
     char *cwd = getcwd_portable();
     size_t cwd_len = strlen(cwd);
-    // visit every directory prefix of the cwd, shallowest first: "", "/home",
-    // "/home/user", ... and finally the cwd itself, hence i <= cwd_len. the
-    // empty prefix is the filesystem root, since the "%s/%s" supplies the
-    // separator.
     for (size_t i = 0; i <= cwd_len; i++) {
       bool at_end = i == cwd_len;
       if (!at_end && cwd[i] != '/') {
@@ -321,8 +314,6 @@ static void resolve_configuration(ZpkConfiguration *config,
              config->sysroot);
   }
 
-  // absolutize once here so every path later joined onto these stays clean
-  // and cwd-independent
   char *resolved = abspath_portable(config->sysroot);
   free(config->sysroot);
   config->sysroot = resolved;
@@ -331,9 +322,7 @@ static void resolve_configuration(ZpkConfiguration *config,
   config->pkgs_path = resolved;
 
   if (cli_extra_repositories != NULL) {
-    // we follow APK semantics in that -X/--repository appends to the list of
-    // repositories, rather than replacing it. so we append the cli-specified
-    // repositories to the end of the list.
+    // -X/--repository appends (like in apk)
     for (uint32_t i = 0; i < vec_char_ptr_len(cli_extra_repositories); i++) {
       char_ptr repo = strdup(*vec_char_ptr_at(cli_extra_repositories, i));
       vec_char_ptr_push(&config->repositories, &repo);
@@ -368,8 +357,6 @@ static const char *USAGE =
     "  -v, --verbose            raise log level to info; -vv for debug\n"
     "  -h, --help               show this help\n";
 
-// matches -v, -vv, -vvv, ..., returning how many v's it found, or 0 if `arg` is
-// not one of those
 static int count_verbose_flag(const char *arg) {
   if (arg[0] != '-') {
     return 0;
@@ -476,8 +463,6 @@ void parse_args(int argc, char **argv, ZpkConfiguration *config,
       dry_run = true;
     } else if (nverbose > 0 || strcmp(arg, "--verbose") == 0) {
       verbosity += nverbose > 0 ? nverbose : 1;
-      // applied immediately, so that everything after this point -- including
-      // the config file search -- logs at the requested level
       g_log_level = verbosity_to_level(verbosity);
     } else if (have_op && kind == ZPK_OP_FETCH &&
                (strcmp(arg, "-o") == 0 || strcmp(arg, "--output") == 0)) {
@@ -569,7 +554,6 @@ void parse_args(int argc, char **argv, ZpkConfiguration *config,
     vec_char_ptr_delete(&targets);
     break;
   case ZPK_OP_LIST:
-    // bare `list` means everything, like apk
     op->list.installed = list_installed;
     op->list.upgradable = list_upgradable;
     op->list.available = list_available;

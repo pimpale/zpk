@@ -1,5 +1,6 @@
 #include "repository.h"
 
+#include <asprintf/asprintf.c>
 #include <assert.h>
 #include <errno.h>
 #include <stddefer.h>
@@ -8,10 +9,11 @@
 
 #include "apkver/apkver.h"
 #include "error.h"
-#include "instances/llrb_char_ptr_bestrepo.h"
+#include "instances/llrb_char_ptr_resolvedpackage.h"
 #include "instances/vec_char_ptr.h"
 #include "oscompatlayer.h"
 #include "pathutils.h"
+#include "resolvedpackage.h"
 
 // doesn't allocate
 static apk_blob_t package_version_blob(char *entry, const char *suffix) {
@@ -64,23 +66,22 @@ bool package_data(
   return true;
 }
 
-ErrVal resolve_package_paths_installed(vec_char_ptr *package_paths,
-                                       char *directory, vec_char_ptr *packages,
-                                       bool none_is_all) {
+ErrVal resolve_package_paths_installed(
+    llrb_char_ptr_resolvedpackage *resolved_packages, char *directory,
+    vec_char_ptr *packages, bool none_is_all) {
   vec_char_ptr installedrepo;
   vec_char_ptr_init(&installedrepo);
   defer vec_char_ptr_delete(&installedrepo);
   vec_char_ptr_push(&installedrepo, &directory);
-  return resolve_package_paths_repositories(package_paths, &installedrepo,
+  return resolve_package_paths_repositories(resolved_packages, &installedrepo,
                                             packages, none_is_all);
 }
 
 // there is NO guarantee that package_paths will be in the same order as
 // packages. (although currently it is, as long as !insert_all)
-ErrVal resolve_package_paths_repositories(vec_char_ptr *package_paths,
-                                          vec_char_ptr *repositories,
-                                          vec_char_ptr *packages,
-                                          bool none_is_all) {
+ErrVal resolve_package_paths_repositories(
+    llrb_char_ptr_resolvedpackage *resolved_packages,
+    vec_char_ptr *repositories, vec_char_ptr *packages, bool none_is_all) {
   size_t n_packages;
   if (packages == NULL) {
     n_packages = 0;
@@ -89,10 +90,6 @@ ErrVal resolve_package_paths_repositories(vec_char_ptr *package_paths,
     n_packages = vec_char_ptr_len(packages);
   }
   bool insert_all = none_is_all && (n_packages == 0);
-
-  llrb_char_ptr_bestrepo bestrepo;
-  llrb_char_ptr_bestrepo_new(&bestrepo);
-  defer llrb_char_ptr_bestrepo_delete_and_freeowned(&bestrepo);
 
   // fetch a list of the packages in the repositories
   size_t n_repositories = vec_char_ptr_len(repositories);
@@ -112,65 +109,73 @@ ErrVal resolve_package_paths_repositories(vec_char_ptr *package_paths,
 
     size_t n_entries = vec_char_ptr_len(&entries);
     for (size_t e = 0; e < n_entries; e++) {
-      char **pEntry = vec_char_ptr_at(&entries, e);
+      char *entry = *vec_char_ptr_at(&entries, e);
 
       char *entrypackagename;
       char *entryversion;
-      if (!package_data(&entrypackagename, &entryversion, *pEntry, ".zip")) {
+      if (!package_data(&entrypackagename, &entryversion, entry, ".zip")) {
         continue;
       }
       defer free(entrypackagename);
       defer free(entryversion);
 
-      BestRepo *brp;
-      if (!llrb_char_ptr_bestrepo_get_ref(&bestrepo, &entrypackagename, &brp)) {
-        BestRepo br = {.entry = *pEntry,
-                       .version = entryversion,
-                       .repository = repository};
-        bool inserted = llrb_char_ptr_bestrepo_insert(
-                            &bestrepo, &entrypackagename, &br) != NULL;
+      ResolvedPackage *brp;
+      if (llrb_char_ptr_resolvedpackage_get_ref(resolved_packages,
+                                                &entrypackagename, &brp)) {
+        ResolvedPackage br = {.package = strdup(entrypackagename),
+                              .version = strdup(entryversion),
+                              .repository = strdup(repository),
+                              .package_path = NULL};
+        char *key = strdup(entrypackagename);
+        bool inserted = llrb_char_ptr_resolvedpackage_insert(resolved_packages,
+                                                             &key, &br) != NULL;
         assert(inserted);
-        // take ownership of entryversion and entrypackagename
-        entryversion = NULL;
-        entrypackagename = NULL;
-        *pEntry = NULL;
 
       } else {
         if (apk_version_compare(APK_BLOB_STR(entryversion),
                                 APK_BLOB_STR(brp->version)) ==
             APK_VERSION_GREATER) {
-          // free existing fields
+          // free existing version and repository
           free(brp->version);
-          free(brp->entry);
+          free(brp->repository);
 
           // take ownership of entry and entryversion
-          brp->version = entryversion;
-          brp->entry = *pEntry;
-          brp->repository = repository;
-
-          entryversion = NULL;
-          *pEntry = NULL;
+          brp->version = strdup(entryversion);
+          brp->repository = strdup(repository);
         }
       }
     }
   }
 
-  if (insert_all) {
-    llrb_char_ptr_bestrepo_iter iter;
-    llrb_char_ptr_bestrepo_iter_begin(&bestrepo, &iter);
-    char *key;
-    BestRepo br;
-    while (llrb_char_ptr_bestrepo_iter_next(&iter, &key, &br)) {
-      char *package_path = joinpath(br.repository, br.entry);
-      vec_char_ptr_push(package_paths, &package_path);
-    }
-  } else {
+  if (!insert_all) {
     bool should_error = false;
 
+    // delete packages not specified in the packages vector
+    llrb_char_ptr_resolvedpackage_iter iter;
+    llrb_char_ptr_resolvedpackage_iter_begin(resolved_packages, &iter);
+    char *key;
+    ResolvedPackage rp;
+    while (llrb_char_ptr_resolvedpackage_iter_next(&iter, &key, &rp)) {
+      bool keep = false;
+      for (size_t i = 0; i < n_packages; i++) {
+        char *package = *vec_char_ptr_at(packages, i);
+        if (strcmp(key, package) == 0) {
+          keep = true;
+          break;
+        }
+      }
+      if (!keep) {
+        free(key);
+        delete_ResolvedPackage(&rp);
+      }
+    }
+
+    // if there exists a package in the package vector not present in the llrb,
+    // raise an error
     for (size_t i = 0; i < n_packages; i++) {
       char *package = *vec_char_ptr_at(packages, i);
-      BestRepo br;
-      if (!llrb_char_ptr_bestrepo_get(&bestrepo, &package, &br)) {
+      if (!llrb_char_ptr_resolvedpackage_get(resolved_packages, &package,
+                                             NULL)) {
         LOG_ERROR_ARGS(
             ERR_LEVEL_ERROR,
             "resolve: did not find validly named package %s in any repository",
@@ -178,13 +183,33 @@ ErrVal resolve_package_paths_repositories(vec_char_ptr *package_paths,
         should_error = true;
         continue;
       }
-
-      char *package_path = joinpath(br.repository, br.entry);
-      vec_char_ptr_push(package_paths, &package_path);
     }
     if (should_error) {
       return ERR_NOSUCHFILE;
     }
+  }
+  return ERR_OK;
+}
+
+ErrVal resolve_and_fetch_package_paths_repositories(
+    llrb_char_ptr_resolvedpackage *resolved_packages,
+    vec_char_ptr *repositories, vec_char_ptr *packages, const char *directory,
+    const char *presuf, bool none_is_all) {
+  ErrVal v1 = resolve_package_paths_repositories(
+      resolved_packages, repositories, packages, none_is_all);
+  if (v1 != ERR_OK) {
+    return v1;
+  }
+  // now fetch each file (for now just calculate the package path (in the
+  // repository itself) and leave it at that) later versions will fetch to
+  // directory/packagename.presuf.zip OR copy to there. the idea is to
+  llrb_char_ptr_resolvedpackage_iter iter;
+  llrb_char_ptr_resolvedpackage_iter_begin(resolved_packages, &iter);
+  char *key;
+  ResolvedPackage *rp;
+  while (llrb_char_ptr_resolvedpackage_iter_next_ref(&iter, &key, &rp)) {
+    asprintf(&rp->package_path, "%s/%s-%s.zip", rp->repository, rp->package,
+             rp->version);
   }
   return ERR_OK;
 }

@@ -7,6 +7,8 @@ In theory, such packages could be installed with a simple `unzip -d / package.zi
 1. Uninstalling packages. zpk stores every package in a cache. If an uninstall is desired, it is simple to enumerate which files the package owns, and delete them. 
 2. Upgrading packages, including removing files that are no longer present in the new package. One can also do a full system upgrade, which compares zip creation dates to determine which packages to update.
 2. Querying which package a file belongs to (eg, `pacman -Qo`).
+3. Conflict checking: checks if any 
+
 
 ## Usage
 zpk mimics apk's interface, but implements only a subset of the functionality:
@@ -19,7 +21,7 @@ commands:
   fetch [-o DIR] <pkg>...  download packages without installing
   upgrade [pkg...]         upgrade packages (all if none given)
   fix [pkg...]             reinstall broken packages (all if none given)
-  list [-I] [-u] [-a]      list installed/upgradable/available packages
+  list [-I] [-u] [-a] [-O] list installed/upgradable/available/orphaned packages
   info -W <path>           show which package owns a path
 
 global options:
@@ -33,9 +35,10 @@ global options:
 
 ## Unsupported
 
-* zpk does not do dependency management. Without a manifest, there is no way to handle this. Packages must vendor their deps or be statically linked.
-* zpk is not a transactional package manager, but half-installed packages can be reinstalled without issue.
-* zpk does not run preinstall or postinstall scripts (Without a manifest, there is no way to specify these.)
+Since we don't have a manifest, we are limited from doing a couple of things other package managers do:
+
+* zpk does not do dependency management. Packages must vendor their deps or be statically linked.
+* zpk does not run preinstall or postinstall scripts.
 
 ## Why?
 

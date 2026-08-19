@@ -15,18 +15,17 @@ SRC_DIRS ?= src vendor platsrc/$(PLATFORM)
 SRCS := $(shell find $(SRC_DIRS) -type f -name *.c)
 OBJS := $(SRCS:%=$(BUILD_DIR)/%.o)
 
-INC_DIRS := vendor src
-INC_FLAGS := $(addprefix -I,$(INC_DIRS))
+INC_FLAGS := -Isrc -isystem vendor
 
-DEFINES := -DMZ_PLATFORM=0 -DMINIZ_NO_ZLIB_COMPATIBLE_NAMES
+DEFINES := -DMINIZ_NO_ZLIB_COMPATIBLE_NAMES
 
-LDFLAGS := -lm 
+LDFLAGS := -lm -flto 
 
 CC := clang
-CFLAGS ?= $(INC_FLAGS) $(DEFINES) -std=c2y -fdefer-ts -MMD -MP -O0 -g3 -Wall -Weverything -pedantic \
+CFLAGS ?= $(INC_FLAGS) $(DEFINES) -std=c2y -fdefer-ts -flto -MMD -MP -O0 -g3 -Wall -Weverything -pedantic \
  -Wno-padded -Wno-switch-enum -Wno-declaration-after-statement -Wno-unsafe-buffer-usage \
  -Wno-implicit-void-ptr-cast -Wno-pre-c2y-compat -Wno-pre-c23-compat -Wno-pre-c11-compat \
- -Wno-switch-default
+ -Wno-switch-default -Wno-disabled-macro-expansion
 
 
 ifeq ($(PLATFORM),windows)
@@ -45,17 +44,13 @@ $(BUILD_DIR)/%.c.o: %.c
 	$(MKDIR_P) $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/vendor/apkver/%.c.o: CFLAGS += -Wno-variadic-macros \
- -Wno-implicit-fallthrough -Wno-sign-compare -Wno-gnu-case-range
 
-$(BUILD_DIR)/vendor/miniz/%.c.o: CFLAGS += -D_DEFAULT_SOURCE \
- -Wno-sign-conversion -Wno-comma -Wno-extra-semi-stmt -Wno-implicit-int-conversion \
- -Wno-cast-qual -Wno-unused-macros -Wno-switch-default -Wno-covered-switch-default
+# supress warnings on vendored libs
+$(BUILD_DIR)/vendor/%.c.o: CFLAGS += -w
 
-$(BUILD_DIR)/vendor/bearssl/%.c.o: CFLAGS += \
- -Ivendor/bearssl/inc -Ivendor/bearssl/src -w
+$(BUILD_DIR)/vendor/miniz/%.c.o: CFLAGS += -D_DEFAULT_SOURCE -DMZ_PLATFORM=0 
 
-$(BUILD_DIR)/vendor/llrb/%.c.o: CFLAGS += -Wno-variadic-macros -Wno-unused-function 
+$(BUILD_DIR)/vendor/bearssl/%.c.o: CFLAGS += -D_DEFAULT_SOURCE -Ivendor/bearssl/inc -Ivendor/bearssl/src
 
 ifeq ($(PLATFORM),windows)
 TARGET_EXEC ?= $(TARGET_NAME).exe 

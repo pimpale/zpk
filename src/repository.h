@@ -2,6 +2,7 @@
 #define repository_h_INCLUDED
 
 #include "error.h"
+#include "instances/llrb_char_ptr_resolvedpackage.h"
 #include "instances/vec_char_ptr.h"
 
 bool package_data(
@@ -15,16 +16,21 @@ bool package_data(
     // Will be ignored from the package name
     const char *suffix);
 
-
-ErrVal resolve_package_paths_installed(vec_char_ptr *package_paths,
-                                       char *directory,
-                                       vec_char_ptr *packages,
+ErrVal resolve_package_paths_installed(llrb_char_ptr_resolvedpackage *resolved_packages,
+                                       char *directory, vec_char_ptr *packages,
                                        bool none_is_all);
 
-// function appends to `package_paths`.
-ErrVal resolve_package_paths_repositories(vec_char_ptr *package_paths,
+
+ErrVal resolve_package_paths_repositories(llrb_char_ptr_resolvedpackage *resolved_packages,
                                           vec_char_ptr *repositories,
                                           vec_char_ptr *packages,
+                                          bool none_is_all);
+
+ErrVal resolve_and_fetch_package_paths_repositories(llrb_char_ptr_resolvedpackage *resolved_packages,
+                                          vec_char_ptr *repositories,
+                                          vec_char_ptr *packages,
+                                          const char* directory,
+                                          const char* presuf,
                                           bool none_is_all);
 
 #endif // repository_h_INCLUDED

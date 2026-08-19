@@ -10,12 +10,14 @@
 #include "index.h"
 #include "instances/llrb_char_ptr_fileclaim.h"
 #include "instances/llrb_path_indexdata.h"
+#include "instances/llrbset_char_ptr.h"
 #include "instances/vec_char_ptr.h"
 #include "instances/vec_fsop_t.h"
 #include "instances/vec_mz_zip_archive_ptr.h"
 #include "oscompatlayer.h"
 #include "pathutils.h"
 #include "repository.h"
+#include "resolvedpackage.h"
 
 static int do_fetch(ZpkConfiguration *pConf, vec_char_ptr *pTargets,
                     char *path) {
@@ -33,14 +35,16 @@ static int do_add(ZpkConfiguration *pConf, vec_char_ptr *packages,
                  vec_char_ptr_len(packages), pConf->sysroot);
 
   // resolve packages to install
-  vec_char_ptr package_paths;
-  vec_char_ptr_init(&package_paths);
-  defer vec_char_ptr_delete_and_freeowned(&package_paths);
+  llrb_char_ptr_resolvedpackage resolved_packages;
+  llrb_char_ptr_resolvedpackage_new(&resolved_packages);
+  defer llrb_char_ptr_resolvedpackage_delete_and_freeowned(&resolved_packages);
 
-  if (resolve_package_paths_repositories(&package_paths, &pConf->repositories,
-                                         packages, false) != ERR_OK) {
-    LOG_ERROR(ERR_LEVEL_FATAL, "failed to resolve package paths");
-    PANIC();
+  // this happens immediately!
+  // dry run doesn't account for downloads btw.
+  if (resolve_and_fetch_package_paths_repositories(
+          &resolved_packages, &pConf->repositories, packages, pConf->pkgs_path,
+          "cached", false) != ERR_OK) {
+    return 1;
   }
 
   // build index
@@ -61,17 +65,22 @@ static int do_add(ZpkConfiguration *pConf, vec_char_ptr *packages,
                      &index);
 
   bool should_proceed = true;
-  for (size_t i = 0; i < vec_char_ptr_len(&package_paths); i++) {
-    char *package_path = *vec_char_ptr_at(&package_paths, i);
+
+  llrb_char_ptr_resolvedpackage_iter iter;
+  llrb_char_ptr_resolvedpackage_iter_begin(&resolved_packages, &iter);
+  char *package;
+  ResolvedPackage rp;
+  while (llrb_char_ptr_resolvedpackage_iter_next(&iter, &package, &rp)) {
 
     // journal intent by moving the thing first. Then we can patch it up. if
     // there's a crash.
-    fsops_emit_cp("install", basename_m(package_path), strdup(package_path),
-                  joinpath(pConf->pkgs_path, basename_m(package_path)), &fsops,
-                  &index);
+    char* dest = rmpresuf(rp.package_path, "cached");
+    assert(dest != NULL);
+    fsops_emit_mv("install", rp.package, strdup(rp.package_path),
+                  dest, &fsops, &index);
 
     ErrVal err = fsops_emit_install_package("install", &fsops, &zips, &index,
-                                            package_path, pConf->sysroot,
+                                            rp.package_path, pConf->sysroot,
                                             &pConf->protected_paths, true);
     if (err != ERR_OK) {
       should_proceed = false;
@@ -91,12 +100,12 @@ static int do_del(ZpkConfiguration *pConf, vec_char_ptr *packages,
   LOG_ERROR_ARGS(ERR_LEVEL_INFO, "removing %zu targets from %s",
                  vec_char_ptr_len(packages), pConf->sysroot);
 
-  // resolve packages to remove
-  vec_char_ptr package_paths;
-  vec_char_ptr_init(&package_paths);
-  defer vec_char_ptr_delete_and_freeowned(&package_paths);
+  // resolve packages to install
+  llrb_char_ptr_resolvedpackage resolved_packages;
+  llrb_char_ptr_resolvedpackage_new(&resolved_packages);
+  defer llrb_char_ptr_resolvedpackage_delete_and_freeowned(&resolved_packages);
 
-  if (resolve_package_paths_installed(&package_paths, pConf->pkgs_path,
+  if (resolve_package_paths_installed(&resolved_packages, pConf->pkgs_path,
                                       packages, false) != ERR_OK) {
     LOG_ERROR(
         ERR_LEVEL_FATAL,
@@ -120,8 +129,10 @@ static int do_del(ZpkConfiguration *pConf, vec_char_ptr *packages,
 
   bool should_proceed = true;
 
-  for (size_t i = 0; i < vec_char_ptr_len(packages); i++) {
-    char *package_path = *vec_char_ptr_at(&package_paths, i);
+  char *package_path;
+  llrbset_char_ptr_iter iter;
+  llrbset_char_ptr_iter_begin(&package_paths, &iter);
+  while (llrbset_char_ptr_iter_next(&iter, &package_path)) {
     ErrVal err =
         fsops_emit_uninstall_package("uninstall", &fsops, &index, package_path,
                                      pConf->sysroot, &pConf->protected_paths);
@@ -156,9 +167,9 @@ static int do_upgrade(ZpkConfiguration *pConf, vec_char_ptr *pTargets,
 static int do_fix(ZpkConfiguration *pConf, vec_char_ptr *packages,
                   bool dry_run) {
   // resolve packages to install
-  vec_char_ptr package_paths;
-  vec_char_ptr_init(&package_paths);
-  defer vec_char_ptr_delete_and_freeowned(&package_paths);
+  llrbset_char_ptr package_paths;
+  llrbset_char_ptr_new(&package_paths);
+  defer llrbset_char_ptr_delete_and_freeowned(&package_paths);
 
   if (resolve_package_paths_installed(&package_paths, pConf->pkgs_path,
                                       packages, true) != ERR_OK) {
@@ -166,8 +177,8 @@ static int do_fix(ZpkConfiguration *pConf, vec_char_ptr *packages,
     PANIC();
   }
 
-  size_t n_targets = vec_char_ptr_len(&package_paths);
-  LOG_ERROR_ARGS(ERR_LEVEL_INFO, "fix: fixing %zu targets", n_targets);
+  LOG_ERROR_ARGS(ERR_LEVEL_INFO, "fix: fixing %zu targets",
+                 llrbset_char_ptr_len(&package_paths));
 
   // build index
   fileindex_t index;
@@ -186,9 +197,11 @@ static int do_fix(ZpkConfiguration *pConf, vec_char_ptr *packages,
   fsops_emit_mkdir_p("prepare", "fix", strdup(pConf->sysroot), &fsops, &index);
 
   bool should_proceed = true;
-  for (size_t i = 0; i < n_targets; i++) {
-    char *package_path = *vec_char_ptr_at(&package_paths, i);
 
+  char *package_path;
+  llrbset_char_ptr_iter iter;
+  llrbset_char_ptr_iter_begin(&package_paths, &iter);
+  while (llrbset_char_ptr_iter_next(&iter, &package_path)) {
     ErrVal err = fsops_emit_install_package("fix", &fsops, &zips, &index,
                                             package_path, pConf->sysroot,
                                             &pConf->protected_paths, false);
@@ -207,17 +220,24 @@ static int do_fix(ZpkConfiguration *pConf, vec_char_ptr *packages,
 
 static int do_list(ZpkConfiguration *pConf, bool installed, bool upgradable,
                    bool available, bool orphaned) {
-  vec_char_ptr installed_package_paths;
-  vec_char_ptr_init(&installed_package_paths);
+  llrbset_char_ptr installed_package_paths;
+  llrbset_char_ptr_new(&installed_package_paths);
   resolve_package_paths_installed(&installed_package_paths, pConf->pkgs_path,
                                   NULL, true);
 
-  vec_char_ptr available_package_paths;
-  vec_char_ptr_init(&available_package_paths);
+  llrbset_char_ptr available_package_paths;
+  llrbset_char_ptr_new(&available_package_paths);
   resolve_package_paths_repositories(&available_package_paths,
                                      &pConf->repositories, NULL, true);
 
-  // TODO: apply filters and such
+  // create a mapping of package name
+  llrbset_char_ptr all_packages;
+  vec_char_ptr_init(&all_packages);
+
+  for (size_t i = 0; i < vec_char_ptr_len(&installed_package_paths); i++) {
+    char *basename = basename_m(*vec_char_ptr_at(&installed_package_paths, i));
+    vec_char_ptr_push(&all_packages, &basename);
+  }
 
   return 0;
 }
