@@ -9,6 +9,7 @@
 #include "fsops.h"
 #include "index.h"
 #include "instances/llrb_char_ptr_fileclaim.h"
+#include "instances/llrb_char_ptr_resolvedpackage.h"
 #include "instances/llrb_path_indexdata.h"
 #include "instances/llrbset_char_ptr.h"
 #include "instances/vec_char_ptr.h"
@@ -43,7 +44,7 @@ static int do_add(ZpkConfiguration *pConf, vec_char_ptr *packages,
   // dry run doesn't account for downloads btw.
   if (resolve_and_fetch_package_paths_repositories(
           &resolved_packages, &pConf->repositories, packages, pConf->pkgs_path,
-          "cached", false) != ERR_OK) {
+          ".cached.zip", false) != ERR_OK) {
     return 1;
   }
 
@@ -52,7 +53,7 @@ static int do_add(ZpkConfiguration *pConf, vec_char_ptr *packages,
   fileindex_build(&index, pConf->sysroot, pConf->pkgs_path);
   defer fileindex_delete(&index);
 
-  // create the fsops vec and the zips vec
+  // contains the fsops of the actual write operation
   vec_fsop_t fsops;
   vec_fsop_t_init(&fsops);
   defer vec_fsop_t_delete_and_freeowned(&fsops);
@@ -68,20 +69,19 @@ static int do_add(ZpkConfiguration *pConf, vec_char_ptr *packages,
 
   llrb_char_ptr_resolvedpackage_iter iter;
   llrb_char_ptr_resolvedpackage_iter_begin(&resolved_packages, &iter);
-  char *package;
   ResolvedPackage rp;
-  while (llrb_char_ptr_resolvedpackage_iter_next(&iter, &package, &rp)) {
+  while (llrb_char_ptr_resolvedpackage_iter_next(&iter, NULL, &rp)) {
 
     // journal intent by moving the thing first. Then we can patch it up. if
     // there's a crash.
-    char* dest = rmpresuf(rp.package_path, "cached");
+    char *dest = replacesuf(rp.package_path, ".cached.zip", ".zip");
     assert(dest != NULL);
-    fsops_emit_mv("install", rp.package, strdup(rp.package_path),
-                  dest, &fsops, &index);
+    fsops_emit_mv("install", rp.package, strdup(rp.package_path), dest, &fsops,
+                  &index);
 
-    ErrVal err = fsops_emit_install_package("install", &fsops, &zips, &index,
-                                            rp.package_path, pConf->sysroot,
-                                            &pConf->protected_paths, true);
+    ErrVal err = fsops_emit_install_package(
+        "install", rp.package, &fsops, &zips, &index, rp.package_path,
+        pConf->sysroot, &pConf->protected_paths, true);
     if (err != ERR_OK) {
       should_proceed = false;
       continue;
@@ -110,7 +110,7 @@ static int do_del(ZpkConfiguration *pConf, vec_char_ptr *packages,
     LOG_ERROR(
         ERR_LEVEL_FATAL,
         "failed to resolve package paths. The packages may not be installed.");
-    PANIC();
+    return 1;
   }
 
   // build index
@@ -118,7 +118,7 @@ static int do_del(ZpkConfiguration *pConf, vec_char_ptr *packages,
   fileindex_build(&index, pConf->sysroot, pConf->pkgs_path);
   defer fileindex_delete(&index);
 
-  // create the fsops vec and the zips vec
+  // contains the fsops of the actual write operation
   vec_fsop_t fsops;
   vec_fsop_t_init(&fsops);
   defer vec_fsop_t_delete_and_freeowned(&fsops);
@@ -129,22 +129,22 @@ static int do_del(ZpkConfiguration *pConf, vec_char_ptr *packages,
 
   bool should_proceed = true;
 
-  char *package_path;
-  llrbset_char_ptr_iter iter;
-  llrbset_char_ptr_iter_begin(&package_paths, &iter);
-  while (llrbset_char_ptr_iter_next(&iter, &package_path)) {
-    ErrVal err =
-        fsops_emit_uninstall_package("uninstall", &fsops, &index, package_path,
-                                     pConf->sysroot, &pConf->protected_paths);
+  llrb_char_ptr_resolvedpackage_iter iter;
+  llrb_char_ptr_resolvedpackage_iter_begin(&resolved_packages, &iter);
+  ResolvedPackage rp;
+  while (llrb_char_ptr_resolvedpackage_iter_next(&iter, NULL, &rp)) {
+    ErrVal err = fsops_emit_uninstall_package(
+        "uninstall", rp.package, &fsops, &index, rp.package_path,
+        pConf->sysroot, &pConf->protected_paths);
     if (err != ERR_OK) {
       should_proceed = false;
       continue;
     }
 
-    // if good to proceed emit final fsop removing the zip
-    // this happens last because if the uninstall is interrupted we want to be
-    // able to resume it.
-    fsops_emit_rm("uninstall", basename_m(package_path), strdup(package_path),
+    // if good to proceed rename back to cached package
+    char *dest = replacesuf(rp.package_path, ".zip", ".cached.zip");
+    assert(dest != NULL);
+    fsops_emit_mv("uninstall", rp.package, strdup(rp.package_path), dest,
                   &fsops, &index);
   }
   if (!should_proceed) {
@@ -167,18 +167,15 @@ static int do_upgrade(ZpkConfiguration *pConf, vec_char_ptr *pTargets,
 static int do_fix(ZpkConfiguration *pConf, vec_char_ptr *packages,
                   bool dry_run) {
   // resolve packages to install
-  llrbset_char_ptr package_paths;
-  llrbset_char_ptr_new(&package_paths);
-  defer llrbset_char_ptr_delete_and_freeowned(&package_paths);
+  llrb_char_ptr_resolvedpackage resolved_packages;
+  llrb_char_ptr_resolvedpackage_new(&resolved_packages);
+  defer llrb_char_ptr_resolvedpackage_delete_and_freeowned(&resolved_packages);
 
-  if (resolve_package_paths_installed(&package_paths, pConf->pkgs_path,
+  if (resolve_package_paths_installed(&resolved_packages, pConf->pkgs_path,
                                       packages, true) != ERR_OK) {
     LOG_ERROR(ERR_LEVEL_FATAL, "fix: failed to resolve package paths");
-    PANIC();
+    return 1;
   }
-
-  LOG_ERROR_ARGS(ERR_LEVEL_INFO, "fix: fixing %zu targets",
-                 llrbset_char_ptr_len(&package_paths));
 
   // build index
   fileindex_t index;
@@ -198,13 +195,13 @@ static int do_fix(ZpkConfiguration *pConf, vec_char_ptr *packages,
 
   bool should_proceed = true;
 
-  char *package_path;
-  llrbset_char_ptr_iter iter;
-  llrbset_char_ptr_iter_begin(&package_paths, &iter);
-  while (llrbset_char_ptr_iter_next(&iter, &package_path)) {
-    ErrVal err = fsops_emit_install_package("fix", &fsops, &zips, &index,
-                                            package_path, pConf->sysroot,
-                                            &pConf->protected_paths, false);
+  llrb_char_ptr_resolvedpackage_iter iter;
+  llrb_char_ptr_resolvedpackage_iter_begin(&resolved_packages, &iter);
+  ResolvedPackage rp;
+  while (llrb_char_ptr_resolvedpackage_iter_next(&iter, NULL, &rp)) {
+    ErrVal err = fsops_emit_install_package(
+        "fix", rp.package, &fsops, &zips, &index, rp.package_path,
+        pConf->sysroot, &pConf->protected_paths, false);
     if (err != ERR_OK) {
       should_proceed = false;
       continue;
@@ -218,25 +215,82 @@ static int do_fix(ZpkConfiguration *pConf, vec_char_ptr *packages,
   return 0;
 }
 
-static int do_list(ZpkConfiguration *pConf, bool installed, bool upgradable,
-                   bool available, bool orphaned) {
-  llrbset_char_ptr installed_package_paths;
-  llrbset_char_ptr_new(&installed_package_paths);
-  resolve_package_paths_installed(&installed_package_paths, pConf->pkgs_path,
-                                  NULL, true);
+static int do_list(ZpkConfiguration *pConf, bool only_installed,
+                   bool only_upgradable, bool only_available,
+                   bool only_orphaned) {
+  llrb_char_ptr_resolvedpackage installed_packages;
+  llrb_char_ptr_resolvedpackage_new(&installed_packages);
+  defer llrb_char_ptr_resolvedpackage_delete_and_freeowned(&installed_packages);
 
-  llrbset_char_ptr available_package_paths;
-  llrbset_char_ptr_new(&available_package_paths);
-  resolve_package_paths_repositories(&available_package_paths,
-                                     &pConf->repositories, NULL, true);
+  if (resolve_package_paths_installed(&installed_packages, pConf->pkgs_path,
+                                      NULL, true) != ERR_OK) {
+    LOG_ERROR(ERR_LEVEL_FATAL,
+              "list: failed to resolve installed package paths");
+    return 1;
+  }
 
-  // create a mapping of package name
+  llrb_char_ptr_resolvedpackage available_packages;
+  llrb_char_ptr_resolvedpackage_new(&available_packages);
+  defer llrb_char_ptr_resolvedpackage_delete_and_freeowned(&available_packages);
+
+  // if we are just doing --installed and nothing else, then we can omit
+  // fetching important bc what if we're offline
+  if (only_upgradable || only_available || only_orphaned || !only_installed) {
+    if (resolve_package_paths_repositories(
+            &available_packages, &pConf->repositories, NULL, true) != ERR_OK) {
+      LOG_ERROR(ERR_LEVEL_FATAL, "list: failed to resolve remote package paths");
+      return 1;
+    }
+  }
+
+  // create joint set of all package names
   llrbset_char_ptr all_packages;
-  vec_char_ptr_init(&all_packages);
+  llrbset_char_ptr_new(&all_packages);
+  defer llrbset_char_ptr_delete(&all_packages); // only borrowing
 
-  for (size_t i = 0; i < vec_char_ptr_len(&installed_package_paths); i++) {
-    char *basename = basename_m(*vec_char_ptr_at(&installed_package_paths, i));
-    vec_char_ptr_push(&all_packages, &basename);
+  {
+    llrb_char_ptr_resolvedpackage_iter iter;
+    char *package;
+
+    // add all installed
+    llrb_char_ptr_resolvedpackage_iter_begin(&installed_packages, &iter);
+    while (llrb_char_ptr_resolvedpackage_iter_next(&iter, &package, NULL)) {
+      llrbset_char_ptr_insert(&all_packages, &package);
+    }
+    // add all available
+    llrb_char_ptr_resolvedpackage_iter_begin(&available_packages, &iter);
+    while (llrb_char_ptr_resolvedpackage_iter_next(&iter, &package, NULL)) {
+      llrbset_char_ptr_insert(&all_packages, &package);
+    }
+  }
+
+  llrbset_char_ptr_iter iter;
+  char *package;
+
+  llrbset_char_ptr_iter_begin(&all_packages, &iter);
+  while (llrbset_char_ptr_iter_next(&iter, &package)) {
+    ResolvedPackage *irp = NULL;
+    ResolvedPackage *arp = NULL;
+    llrb_char_ptr_resolvedpackage_get_ref(&installed_packages, &package, &irp);
+    llrb_char_ptr_resolvedpackage_get_ref(&available_packages, &package, &arp);
+    if (only_installed && irp == NULL) {
+      continue;
+    }
+    if (only_available && arp == NULL) {
+      continue;
+    }
+    if (only_orphaned && !(irp != NULL && arp == NULL)) {
+      continue;
+    }
+    if (only_upgradable) {
+      if (irp == NULL || arp == NULL) {
+        continue;
+      }
+      if (!version_is_greater(arp->version, irp->version)) {
+        continue;
+      }
+    }
+    puts(package);
   }
 
   return 0;

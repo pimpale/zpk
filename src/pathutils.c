@@ -31,15 +31,10 @@ char *expandtilde(const char *input) {
   return expanded;
 }
 
-// normalize the filename by dropping "." components and empty components
-// (leading, doubled, and trailing slashes). if the filename is bad (has a
-// ".." component, contains a backslash, or normalizes to nothing) then return
-// NULL. caller must free the returned string if it is not NULL
+// allocates
 char *normalize(const char *filename) {
   char *out = malloc(strlen(filename) + 1);
   size_t out_len = 0;
-  // where the current component starts in out; rewinding to this drops the
-  // component without disturbing the separator before it
   size_t comp_start = 0;
   enum { CS_START, CS_ONEDOT, CS_TWODOTS, CS_OTHER } state = CS_START;
   for (const char *p = filename;; p++) {
@@ -92,10 +87,10 @@ char *normalize(const char *filename) {
   return out;
 }
 
-bool startswith(const char* str, const char* prefix) {
+bool startswith(const char *str, const char *prefix) {
   size_t len = strlen(str);
   size_t prelen = strlen(prefix);
-  if(prelen > len) {
+  if (prelen > len) {
     return false;
   }
   return strncmp(str, prefix, prelen) == 0;
@@ -132,11 +127,11 @@ char *joinstr2(const char *s1, const char *s2) {
 }
 
 char *joinpath(const char *s1, const char *s3) {
-  if(endswith(s1, "/")) {
+  if (endswith(s1, "/")) {
     return joinstr2(s1, s3);
   }
-  const char* s2 = "/";
-  
+  const char *s2 = "/";
+
   size_t len1 = strlen(s1);
   size_t len2 = strlen(s2);
   size_t len3 = strlen(s3);
@@ -148,5 +143,20 @@ char *joinpath(const char *s1, const char *s3) {
   strcpy(result, s1);
   strcat(result, s2);
   strcat(result, s3);
+  return result;
+}
+
+char *replacesuf(const char *input, const char *oldsuf, const char *newsuf) {
+  if (!endswith(input, oldsuf)) {
+    return NULL;
+  }
+  size_t inputlen = strlen(input);
+  size_t prefixlen = inputlen - strlen(oldsuf);
+  size_t newsuflen = strlen(newsuf);
+  char *result = malloc(prefixlen + newsuflen + 1);
+  if (result == NULL)
+    return NULL;
+  memcpy(result, input, prefixlen);
+  strcpy(result + prefixlen, newsuf);
   return result;
 }

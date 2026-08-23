@@ -16,21 +16,19 @@ bool package_data(
     // Will be ignored from the package name
     const char *suffix);
 
-ErrVal resolve_package_paths_installed(llrb_char_ptr_resolvedpackage *resolved_packages,
-                                       char *directory, vec_char_ptr *packages,
-                                       bool none_is_all);
+ErrVal resolve_package_paths_installed(
+    llrb_char_ptr_resolvedpackage *resolved_packages, char *directory,
+    vec_char_ptr *packages, bool none_is_all);
 
+ErrVal resolve_package_paths_repositories(
+    llrb_char_ptr_resolvedpackage *resolved_packages,
+    vec_char_ptr *repositories, vec_char_ptr *packages, bool none_is_all);
 
-ErrVal resolve_package_paths_repositories(llrb_char_ptr_resolvedpackage *resolved_packages,
-                                          vec_char_ptr *repositories,
-                                          vec_char_ptr *packages,
-                                          bool none_is_all);
+ErrVal resolve_and_fetch_package_paths_repositories(
+    llrb_char_ptr_resolvedpackage *resolved_packages,
+    vec_char_ptr *repositories, vec_char_ptr *packages, const char *directory,
+    const char *suffix, bool none_is_all);
 
-ErrVal resolve_and_fetch_package_paths_repositories(llrb_char_ptr_resolvedpackage *resolved_packages,
-                                          vec_char_ptr *repositories,
-                                          vec_char_ptr *packages,
-                                          const char* directory,
-                                          const char* presuf,
-                                          bool none_is_all);
+bool version_is_greater(char *a, char *b);
 
 #endif // repository_h_INCLUDED

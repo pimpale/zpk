@@ -67,7 +67,9 @@ ErrVal fsops_emit_rm_rf(const char *op, const char *pkg,
 
 ErrVal fsops_emit_install_package(
     // install can be called as either a "fix", or "install" operation
-    const char* op,
+    const char *op,
+    // the package
+    const char *pkg,
     // appends to this if the operation would succeed
     vec_fsop_t *fsops,
     // fsops refer to indexes in the zips. appends to this if the operation
@@ -82,21 +84,22 @@ ErrVal fsops_emit_install_package(
     // protected paths
     vec_char_ptr *protected_paths,
     // refuse to proceed if a duplicate exists
-    bool flag_duplicate
-);
+    bool flag_duplicate);
 
-ErrVal fsops_emit_uninstall_package(
-    const char* op,
-    // appends to this if the operation would succeed
-    vec_fsop_t *fsops,
-    // file index (for file conflict identification)
-    fileindex_t *index,
-    // zip file to uninstall
-    char *package_path,
-    // where to uninstall
-    char *sysroot,
-    // protected paths
-    vec_char_ptr *protected_paths);
+ErrVal
+fsops_emit_uninstall_package(const char *op,
+                             // the package
+                             const char *pkg,
+                             // appends to this if the operation would succeed
+                             vec_fsop_t *fsops,
+                             // file index (for file conflict identification)
+                             fileindex_t *index,
+                             // zip file to uninstall
+                             char *package_path,
+                             // where to uninstall
+                             char *sysroot,
+                             // protected paths
+                             vec_char_ptr *protected_paths);
 
 void execute_fsops(
     // executes these

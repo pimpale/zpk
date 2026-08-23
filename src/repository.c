@@ -1,6 +1,6 @@
 #include "repository.h"
 
-#include <asprintf/asprintf.c>
+#include <asprintf/asprintf.h>
 #include <assert.h>
 #include <errno.h>
 #include <stddefer.h>
@@ -9,11 +9,16 @@
 
 #include "apkver/apkver.h"
 #include "error.h"
+#include "fileutils.h"
 #include "instances/llrb_char_ptr_resolvedpackage.h"
 #include "instances/vec_char_ptr.h"
 #include "oscompatlayer.h"
 #include "pathutils.h"
 #include "resolvedpackage.h"
+
+bool version_is_greater(char *a, char *b) {
+  return apk_version_compare_str(a, b) == APK_VERSION_GREATER;
+}
 
 // doesn't allocate
 static apk_blob_t package_version_blob(char *entry, const char *suffix) {
@@ -73,8 +78,20 @@ ErrVal resolve_package_paths_installed(
   vec_char_ptr_init(&installedrepo);
   defer vec_char_ptr_delete(&installedrepo);
   vec_char_ptr_push(&installedrepo, &directory);
-  return resolve_package_paths_repositories(resolved_packages, &installedrepo,
-                                            packages, none_is_all);
+  ErrVal err = resolve_package_paths_repositories(
+      resolved_packages, &installedrepo, packages, none_is_all);
+  if (err != ERR_OK) {
+    return err;
+  }
+
+  llrb_char_ptr_resolvedpackage_iter iter;
+  llrb_char_ptr_resolvedpackage_iter_begin(resolved_packages, &iter);
+  ResolvedPackage *rp;
+  while (llrb_char_ptr_resolvedpackage_iter_next_ref(&iter, NULL, &rp)) {
+    asprintf(&rp->package_path, "%s/%s-%s.zip", rp->repository, rp->package,
+             rp->version);
+  }
+  return ERR_OK;
 }
 
 // there is NO guarantee that package_paths will be in the same order as
@@ -120,16 +137,16 @@ ErrVal resolve_package_paths_repositories(
       defer free(entryversion);
 
       ResolvedPackage *brp;
-      if (llrb_char_ptr_resolvedpackage_get_ref(resolved_packages,
-                                                &entrypackagename, &brp)) {
+      if (!llrb_char_ptr_resolvedpackage_get_ref(resolved_packages,
+                                                 &entrypackagename, &brp)) {
         ResolvedPackage br = {.package = strdup(entrypackagename),
                               .version = strdup(entryversion),
                               .repository = strdup(repository),
                               .package_path = NULL};
         char *key = strdup(entrypackagename);
-        bool inserted = llrb_char_ptr_resolvedpackage_insert(resolved_packages,
-                                                             &key, &br) != NULL;
-        assert(inserted);
+        brp =
+            llrb_char_ptr_resolvedpackage_insert(resolved_packages, &key, &br);
+        assert(brp != NULL);
 
       } else {
         if (apk_version_compare(APK_BLOB_STR(entryversion),
@@ -150,24 +167,39 @@ ErrVal resolve_package_paths_repositories(
   if (!insert_all) {
     bool should_error = false;
 
-    // delete packages not specified in the packages vector
-    llrb_char_ptr_resolvedpackage_iter iter;
-    llrb_char_ptr_resolvedpackage_iter_begin(resolved_packages, &iter);
-    char *key;
-    ResolvedPackage rp;
-    while (llrb_char_ptr_resolvedpackage_iter_next(&iter, &key, &rp)) {
-      bool keep = false;
-      for (size_t i = 0; i < n_packages; i++) {
-        char *package = *vec_char_ptr_at(packages, i);
-        if (strcmp(key, package) == 0) {
-          keep = true;
-          break;
+    // get the packages that weren't specified in the packages vector
+    vec_char_ptr todelete;
+    vec_char_ptr_init(&todelete);
+    defer vec_char_ptr_delete(&todelete);
+    {
+      llrb_char_ptr_resolvedpackage_iter iter;
+      llrb_char_ptr_resolvedpackage_iter_begin(resolved_packages, &iter);
+      char *key;
+      ResolvedPackage rp;
+      while (llrb_char_ptr_resolvedpackage_iter_next(&iter, &key, &rp)) {
+        bool keep = false;
+        for (size_t i = 0; i < n_packages; i++) {
+          char *package = *vec_char_ptr_at(packages, i);
+          if (strcmp(key, package) == 0) {
+            keep = true;
+            break;
+          }
+        }
+        if (!keep) {
+          vec_char_ptr_push(&todelete, &key);
         }
       }
-      if (!keep) {
-        free(key);
-        delete_ResolvedPackage(&rp);
-      }
+    }
+
+    // now actually remove those from the tree
+    for (size_t i = 0; i < vec_char_ptr_len(&todelete); i++) {
+      char *key = *vec_char_ptr_at(&todelete, i);
+      ResolvedPackage value;
+      bool removed = llrb_char_ptr_resolvedpackage_remove(resolved_packages,
+                                                          &key, NULL, &value);
+      assert(removed);
+      free(key);
+      delete_ResolvedPackage(&value);
     }
 
     // if there exists a package in the package vector not present in the llrb,
@@ -194,12 +226,13 @@ ErrVal resolve_package_paths_repositories(
 ErrVal resolve_and_fetch_package_paths_repositories(
     llrb_char_ptr_resolvedpackage *resolved_packages,
     vec_char_ptr *repositories, vec_char_ptr *packages, const char *directory,
-    const char *presuf, bool none_is_all) {
+    const char *suffix, bool none_is_all) {
   ErrVal v1 = resolve_package_paths_repositories(
       resolved_packages, repositories, packages, none_is_all);
   if (v1 != ERR_OK) {
     return v1;
   }
+  bool should_error = false;
   // now fetch each file (for now just calculate the package path (in the
   // repository itself) and leave it at that) later versions will fetch to
   // directory/packagename.presuf.zip OR copy to there. the idea is to
@@ -208,8 +241,24 @@ ErrVal resolve_and_fetch_package_paths_repositories(
   char *key;
   ResolvedPackage *rp;
   while (llrb_char_ptr_resolvedpackage_iter_next_ref(&iter, &key, &rp)) {
-    asprintf(&rp->package_path, "%s/%s-%s.zip", rp->repository, rp->package,
-             rp->version);
+    char *src;
+    char *dest;
+    asprintf(&src, "%s/%s-%s.zip", rp->repository, rp->package, rp->version);
+    asprintf(&dest, "%s/%s-%s%s", directory, rp->package, rp->version, suffix);
+    rp->package_path = dest;
+
+    // test if the file doesn't yet exist
+    if (path_type_portable(dest) == PATH_TYPE_MISSING) {
+      if (copy_file(src, dest) != 0) {
+        LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "fetch %s: copying %s to %s: %s",
+                       rp->package, src, dest, strerror(errno));
+        should_error = true;
+      }
+    }
+    free(src);
+  }
+  if (should_error) {
+    return ERR_UNKNOWN;
   }
   return ERR_OK;
 }

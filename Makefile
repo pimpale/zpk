@@ -31,7 +31,7 @@ CFLAGS ?= $(INC_FLAGS) $(DEFINES) -std=c2y -fdefer-ts -flto -MMD -MP -O0 -g3 -Wa
 ifeq ($(PLATFORM),windows)
 CROSSFLAGS := --target=x86_64-w64-windows-gnu
 CFLAGS += $(CROSSFLAGS)
-LDFLAGS += $(CROSSFLAGS)
+LDFLAGS += $(CROSSFLAGS) -fuse-ld=lld
 endif
 
 ifeq ($(PLATFORM),posix)

@@ -1,9 +1,9 @@
 #include "configuration.h"
 
-#include "asprintf/asprintf.h"
 #include "error.h"
 #include "oscompatlayer.h"
 #include "pathutils.h"
+#include <asprintf/asprintf.h>
 
 #include <errno.h>
 #include <stdlib.h>
@@ -346,7 +346,8 @@ static const char *USAGE =
     "  fetch [-o DIR] <pkg>...  download packages without installing\n"
     "  upgrade [pkg...]         upgrade packages (all if none given)\n"
     "  fix [pkg...]             reinstall broken packages (all if none given)\n"
-    "  list [-I] [-u] [-a] [-O] list installed/upgradable/available/orphaned packages\n"
+    "  list [-I] [-u] [-a] [-O] list installed/upgradable/available/orphaned "
+    "packages\n"
     "  info -W <path>           show which package owns a path\n"
     "\n"
     "global options:\n"
@@ -476,9 +477,9 @@ void parse_args(int argc, char **argv, ZpkConfiguration *config,
     } else if (have_op && kind == ZPK_OP_LIST &&
                (strcmp(arg, "-a") == 0 || strcmp(arg, "--available") == 0)) {
       list_available = true;
-      } else if (have_op && kind == ZPK_OP_LIST &&
+    } else if (have_op && kind == ZPK_OP_LIST &&
                (strcmp(arg, "-O") == 0 || strcmp(arg, "--orphaned") == 0)) {
-      list_available = true;
+      list_orphaned = true;
     } else if (have_op && kind == ZPK_OP_OWNER &&
                (strcmp(arg, "-W") == 0 || strcmp(arg, "--who-owns") == 0)) {
       info_who_owns = true;

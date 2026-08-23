@@ -7,6 +7,7 @@
 #include <time.h>
 
 #include "error.h"
+#include "fileutils.h"
 #include "fsop.h"
 #include "fsops.h"
 #include "index.h"
@@ -18,45 +19,6 @@
 #include "miniz/miniz.h"
 #include "oscompatlayer.h"
 #include "pathutils.h"
-
-static int copy_file(const char *from, const char *to) {
-  FILE *src = fopen(from, "rb");
-  if (src == NULL) {
-    return -1;
-  }
-  FILE *dst = fopen(to, "wb");
-  if (dst == NULL) {
-    int saved_errno = errno;
-    fclose(src);
-    errno = saved_errno;
-    return -1;
-  }
-
-  char buf[64 * 1024];
-  size_t n;
-  while ((n = fread(buf, 1, sizeof buf, src)) > 0) {
-    if (fwrite(buf, 1, n, dst) != n) {
-      int saved_errno = errno;
-      fclose(src);
-      fclose(dst);
-      errno = saved_errno;
-      return -1;
-    }
-  }
-  if (ferror(src) != 0) {
-    int saved_errno = errno;
-    fclose(src);
-    fclose(dst);
-    errno = saved_errno;
-    return -1;
-  }
-  fclose(src);
-  // the last buffered write can only fail here, so this close is load-bearing
-  if (fclose(dst) != 0) {
-    return -1;
-  }
-  return 0;
-}
 
 // logging is mandatory here
 void execute_fsops(vec_fsop_t *fsops, const bool dry_run) {
@@ -445,6 +407,8 @@ static char *maybe_divert_path(const char *path,
 ErrVal fsops_emit_install_package(
     //
     const char *op,
+    // the name of the package
+    const char *package,
     // appends to this if the operation would succeed
     vec_fsop_t *fsops,
     // fsops refer to indexes in the zips. appends to this if the operation
@@ -452,6 +416,7 @@ ErrVal fsops_emit_install_package(
     vec_mz_zip_archive_ptr *zips,
     // file index (for file conflict identification)
     fileindex_t *index,
+
     // zip file to install
     char *package_path,
     // where to install
@@ -460,9 +425,6 @@ ErrVal fsops_emit_install_package(
     vec_char_ptr *protected_paths,
     // refuse to proceed if a duplicate exists
     bool flag_duplicate) {
-
-  char *package = basename_m(package_path);
-  assert(package != NULL);
 
   bool changed_during_transaction = false;
   if (flag_duplicate &&
@@ -590,6 +552,8 @@ ErrVal fsops_emit_install_package(
 ErrVal fsops_emit_uninstall_package(
     //
     const char *op,
+    // the name of the package
+    const char *package,
     // appends to this if the operation would succeed
     vec_fsop_t *fsops,
     // file index (for file conflict identification)
@@ -600,10 +564,6 @@ ErrVal fsops_emit_uninstall_package(
     char *sysroot,
     // protected paths
     vec_char_ptr *protected_paths) {
-
-  char *package = basename_m(package_path);
-  assert(package != NULL);
-
   bool changed_during_transaction = false;
   if (!fileindex_contains_package(index, package,
                                   &changed_during_transaction)) {

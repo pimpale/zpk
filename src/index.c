@@ -249,31 +249,33 @@ ErrVal fileindex_build(fileindex_t *fileindex, const char *sysroot,
   llrb_path_filestatus *statuses = &fileindex->statuses;
   llrb_path_filestatus_new(statuses);
 
-  // first list files in the pkgs path:
-  vec_char_ptr packages_path;
-  vec_char_ptr_init(&packages_path);
-  defer vec_char_ptr_delete_and_freeowned(&packages_path);
+  // resolve installed packages
+  llrb_char_ptr_resolvedpackage installed_packages;
+  llrb_char_ptr_resolvedpackage_new(&installed_packages);
+  defer llrb_char_ptr_resolvedpackage_delete_and_freeowned(&installed_packages);
 
-  if (resolve_package_paths_installed(&packages_path, pkgs_path, NULL, true) !=
-      ERR_OK) {
+  if (resolve_package_paths_installed(&installed_packages, pkgs_path, NULL,
+                                      true) != ERR_OK) {
     return ERR_UNKNOWN;
   }
 
-  for (size_t i = 0; i < vec_char_ptr_len(&packages_path); i++) {
-    char *package_path = *vec_char_ptr_at(&packages_path, i);
+  llrb_char_ptr_resolvedpackage_iter iter;
+  llrb_char_ptr_resolvedpackage_iter_begin(&installed_packages, &iter);
+  ResolvedPackage rp;
+  while (llrb_char_ptr_resolvedpackage_iter_next(&iter, NULL, &rp)) {
     mz_zip_archive zip;
     mz_zip_zero_struct(&zip);
     defer mz_zip_reader_end(&zip);
-    if (!mz_zip_reader_init_file(&zip, package_path, 0)) {
+    if (!mz_zip_reader_init_file(&zip, rp.package_path, 0)) {
       LOG_ERROR_ARGS(ERR_LEVEL_ERROR,
-                     "index %s: could not open zip archive: %s", package_path,
+                     "index %s: could not open zip archive: %s",
+                     rp.package_path,
                      mz_zip_get_error_string(mz_zip_get_last_error(&zip)));
       continue;
     }
-    char *entry = basename_m(package_path);
     llrb_char_ptr_fileclaim claims;
-    fileclaims_collect(&zip, "index", entry, sysroot, &claims);
-    merge_claims_into_index(fileindex, entry, &claims, false);
+    fileclaims_collect(&zip, "index", rp.package, sysroot, &claims);
+    merge_claims_into_index(fileindex, rp.package, &claims, false);
     fileclaims_delete(&claims);
   }
   return ERR_OK;
