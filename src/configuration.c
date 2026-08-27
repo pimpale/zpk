@@ -99,16 +99,28 @@ static void maybe_apply_config_file(ZpkConfiguration *config, const char *path,
                    config->sysroot);
   }
 
-  val = toml_table_get(table, "pkgs_path");
+  val = toml_table_get(table, "installed_pkgs_path");
   if (val != NULL) {
     if (val->type != TOML_STRING) {
-      LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "%s: pkgs_path must be a string", path);
+      LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "%s: installed_pkgs_path must be a string", path);
       PANIC();
     }
-    free(config->pkgs_path);
-    config->pkgs_path = resolve_config_relative(path, val->value.string->str);
-    LOG_ERROR_ARGS(ERR_LEVEL_DEBUG, "%s: pkgs_path set to %s", path,
-                   config->pkgs_path);
+    free(config->installed_pkgs_path);
+    config->installed_pkgs_path = resolve_config_relative(path, val->value.string->str);
+    LOG_ERROR_ARGS(ERR_LEVEL_DEBUG, "%s: installed_pkgs_path set to %s", path,
+                   config->installed_pkgs_path);
+  }
+
+  val = toml_table_get(table, "cached_pkgs_path");
+  if (val != NULL) {
+    if (val->type != TOML_STRING) {
+      LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "%s: cached_pkgs_path must be a string", path);
+      PANIC();
+    }
+    free(config->cached_pkgs_path);
+    config->cached_pkgs_path = resolve_config_relative(path, val->value.string->str);
+    LOG_ERROR_ARGS(ERR_LEVEL_DEBUG, "%s: cached_pkgs_path set to %s", path,
+                   config->cached_pkgs_path);
   }
 
   val = toml_table_get(table, "repositories");
@@ -214,10 +226,16 @@ static void apply_env_config(ZpkConfiguration *config) {
     config->sysroot = expandtilde(env);
   }
 
-  env = getenv("ZPK_PKGS_PATH");
+  env = getenv("ZPK_INSTALLED_PKGS_PATH");
   if (env != NULL) {
-    free(config->pkgs_path);
-    config->pkgs_path = expandtilde(env);
+    free(config->installed_pkgs_path);
+    config->installed_pkgs_path = expandtilde(env);
+  }
+
+  env = getenv("ZPK_CACHED_PKGS_PATH");
+  if (env != NULL) {
+    free(config->cached_pkgs_path);
+    config->installed_pkgs_path = expandtilde(env);
   }
 
   // comma-separated list; replaces any file-configured repositories
@@ -239,7 +257,7 @@ static void resolve_configuration(ZpkConfiguration *config,
                                   const char *cli_sysroot,
                                   vec_char_ptr *cli_extra_repositories) {
   config->sysroot = NULL;
-  config->pkgs_path = NULL;
+  config->installed_pkgs_path = NULL;
   vec_char_ptr_init(&config->repositories);
   vec_char_ptr_init(&config->protected_paths);
 
@@ -306,20 +324,20 @@ static void resolve_configuration(ZpkConfiguration *config,
     config->sysroot = strdup("/");
   }
 
-  if (config->pkgs_path == NULL) {
+  if (config->installed_pkgs_path == NULL) {
     size_t sysroot_len = strlen(config->sysroot);
     bool trailing_slash =
         sysroot_len > 0 && config->sysroot[sysroot_len - 1] == '/';
-    asprintf(&config->pkgs_path, trailing_slash ? "%spkg" : "%s/pkg",
+    asprintf(&config->installed_pkgs_path, trailing_slash ? "%spkg" : "%s/pkg",
              config->sysroot);
   }
 
   char *resolved = abspath_portable(config->sysroot);
   free(config->sysroot);
   config->sysroot = resolved;
-  resolved = abspath_portable(config->pkgs_path);
-  free(config->pkgs_path);
-  config->pkgs_path = resolved;
+  resolved = abspath_portable(config->installed_pkgs_path);
+  free(config->installed_pkgs_path);
+  config->installed_pkgs_path = resolved;
 
   if (cli_extra_repositories != NULL) {
     // -X/--repository appends (like in apk)
@@ -332,7 +350,8 @@ static void resolve_configuration(ZpkConfiguration *config,
 
 void delete_ZpkConfiguration(ZpkConfiguration *config) {
   free(config->sysroot);
-  free(config->pkgs_path);
+  free(config->installed_pkgs_path);
+  free(config->cached_pkgs_path);
   vec_char_ptr_delete_and_freeowned(&config->repositories);
   vec_char_ptr_delete_and_freeowned(&config->protected_paths);
 }

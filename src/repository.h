@@ -14,20 +14,24 @@ bool package_data(
     char *entry,
     // .zip, or .uninstalling.zip or something.
     // Will be ignored from the package name
-    const char *suffix);
+    const char *suffix
+);
 
 ErrVal resolve_package_paths_installed(
-    llrb_char_ptr_resolvedpackage *resolved_packages, char *directory,
-    vec_char_ptr *packages, bool none_is_all);
-
-ErrVal resolve_package_paths_repositories(
     llrb_char_ptr_resolvedpackage *resolved_packages,
-    vec_char_ptr *repositories, vec_char_ptr *packages, bool none_is_all);
+    char *installed_directory,
+    vec_char_ptr *packages,
+    bool none_is_all
+);
 
 ErrVal resolve_and_fetch_package_paths_repositories(
     llrb_char_ptr_resolvedpackage *resolved_packages,
-    vec_char_ptr *repositories, vec_char_ptr *packages, const char *directory,
-    const char *suffix, bool none_is_all);
+    vec_char_ptr *repositories,
+    vec_char_ptr *packages,
+    const char *cache_directory,
+    bool none_is_all,
+    bool download
+);
 
 bool version_is_greater(char *a, char *b);
 

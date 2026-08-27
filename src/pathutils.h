@@ -9,4 +9,5 @@ bool endswith(const char *str, const char *suffix);
 char *joinstr2(const char *s1, const char *s2);
 char *joinpath(const char *s1, const char* s2);
 char *replacesuf(const char *input, const char* oldsuf, const char* newsuf);
+const char* maybesep(const char* in);
 #endif // pathutils_h_INCLUDED

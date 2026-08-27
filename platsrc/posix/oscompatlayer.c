@@ -14,7 +14,6 @@
 #include "asprintf/asprintf.h"
 #include "oscompatlayer.h"
 
-
 char *getenv_home_portable(void) {
   return strdup(getenv("HOME"));
 }
@@ -26,8 +25,7 @@ char *getcwd_portable(void) {
   for (size_t size = 256;; size *= 2) {
     char *cwd = malloc(size);
     if (cwd == NULL) {
-      LOG_ERROR(ERR_LEVEL_FATAL,
-                "could not allocate memory for current working directory");
+      LOG_ERROR(ERR_LEVEL_FATAL, "could not allocate memory for current working directory");
       PANIC();
     }
     if (getcwd(cwd, size) != NULL) {
@@ -36,9 +34,11 @@ char *getcwd_portable(void) {
     int saved_errno = errno;
     free(cwd);
     if (saved_errno != ERANGE) {
-      LOG_ERROR_ARGS(ERR_LEVEL_FATAL,
-                     "could not get current working directory: %s",
-                     strerror(saved_errno));
+      LOG_ERROR_ARGS(
+        ERR_LEVEL_FATAL,
+        "could not get current working directory: %s",
+        strerror(saved_errno)
+      );
       PANIC();
     }
   }
@@ -56,8 +56,7 @@ path_type path_type_portable(const char *path) {
   struct stat st;
   if (stat(path, &st) != 0) {
     // ENOTDIR: a parent component exists but is a file, so path can't exist
-    return errno == ENOENT || errno == ENOTDIR ? PATH_TYPE_MISSING
-                                               : PATH_TYPE_ERROR;
+    return errno == ENOENT || errno == ENOTDIR ? PATH_TYPE_MISSING : PATH_TYPE_ERROR;
   }
   if (S_ISDIR(st.st_mode)) {
     return PATH_TYPE_DIR;
@@ -77,15 +76,13 @@ int rename_portable(const char *oldpath, const char *newpath) {
 static void listdir_push(vec_char_ptr *out, const char *name) {
   char *copy = strdup(name);
   if (copy == NULL) {
-    LOG_ERROR(ERR_LEVEL_FATAL,
-              "could not allocate memory for directory listing");
+    LOG_ERROR(ERR_LEVEL_FATAL, "could not allocate memory for directory listing");
     PANIC();
   }
   vec_char_ptr_push(out, &copy);
 }
 
-int listdir_portable(const char *path, vec_char_ptr *out_files,
-                     vec_char_ptr *out_dirs) {
+int listdir_portable(const char *path, vec_char_ptr *out_files, vec_char_ptr *out_dirs) {
   DIR *dir = opendir(path);
   if (dir == NULL) {
     return -1;
@@ -93,8 +90,7 @@ int listdir_portable(const char *path, vec_char_ptr *out_files,
   // readdir returns NULL for both end-of-directory and failure; only errno
   // distinguishes them
   errno = 0;
-  for (struct dirent *entry = readdir(dir); entry != NULL;
-       entry = readdir(dir)) {
+  for (struct dirent *entry = readdir(dir); entry != NULL; entry = readdir(dir)) {
     if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
       errno = 0;
       continue;
@@ -104,8 +100,7 @@ int listdir_portable(const char *path, vec_char_ptr *out_files,
     // level exposes, and it is absent entirely on some systems
     char *full;
     if (asprintf(&full, "%s/%s", path, entry->d_name) < 0) {
-      LOG_ERROR(ERR_LEVEL_FATAL,
-                "could not allocate memory for directory listing");
+      LOG_ERROR(ERR_LEVEL_FATAL, "could not allocate memory for directory listing");
       PANIC();
     }
     struct stat st;
@@ -207,8 +202,7 @@ char *abspath_portable(const char *path) {
   char *cwd = getcwd_portable();
   char *joined;
   if (asprintf(&joined, "%s/%s", cwd, path) < 0) {
-    LOG_ERROR(ERR_LEVEL_FATAL,
-              "could not allocate memory for absolute path resolution");
+    LOG_ERROR(ERR_LEVEL_FATAL, "could not allocate memory for absolute path resolution");
     PANIC();
   }
   free(cwd);

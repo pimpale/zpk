@@ -26,63 +26,133 @@ void execute_fsops(vec_fsop_t *fsops, const bool dry_run) {
     fsop_t *o = vec_fsop_t_at(fsops, i);
     switch (o->kind) {
 
-    case FSOP_RENAME:
-      LOG_ERROR_ARGS(ERR_LEVEL_INFO, "%s %s: renaming from %s to %s", o->op,
-                     o->pkg, o->rename.from, o->rename.to);
-      if (!dry_run && rename_portable(o->rename.from, o->rename.to) != 0) {
-        LOG_ERROR_ARGS(ERR_LEVEL_ERROR,
-                       "%s %s: failed to rename file %s to %s: %s", o->op,
-                       o->pkg, o->rename.from, o->rename.to, strerror(errno));
-      }
-      break;
-    case FSOP_COPY:
-      LOG_ERROR_ARGS(ERR_LEVEL_INFO, "%s %s: copying from %s to %s", o->op,
-                     o->pkg, o->copy.from, o->copy.to);
-      if (!dry_run && copy_file(o->copy.from, o->copy.to) != 0) {
-        LOG_ERROR_ARGS(ERR_LEVEL_ERROR,
-                       "%s %s: failed to copy file %s to %s: %s", o->op, o->pkg,
-                       o->copy.from, o->copy.to, strerror(errno));
-      }
-      break;
-    case FSOP_CREATEFILE:
-      LOG_ERROR_ARGS(ERR_LEVEL_INFO, "%s %s: extracting file to %s", o->op,
-                     o->pkg, o->createfile.path);
-      if (!dry_run && !mz_zip_reader_extract_to_file(o->createfile.zip,
-                                                     o->createfile.file_index,
-                                                     o->createfile.path, 0)) {
+      case FSOP_RENAME:
         LOG_ERROR_ARGS(
-            ERR_LEVEL_ERROR, "%s %s: could not extract file %s: %s", o->op,
-            o->pkg, o->createfile.path,
-            mz_zip_get_error_string(mz_zip_get_last_error(o->createfile.zip)));
-      }
-      break;
+          ERR_LEVEL_INFO,
+          "%s %s: renaming from %s to %s",
+          o->op,
+          o->pkg,
+          o->rename.from,
+          o->rename.to
+        );
+        if (!dry_run && rename_portable(o->rename.from, o->rename.to) != 0) {
+          LOG_ERROR_ARGS(
+            ERR_LEVEL_ERROR,
+            "%s %s: failed to rename file %s to %s: %s",
+            o->op,
+            o->pkg,
+            o->rename.from,
+            o->rename.to,
+            strerror(errno)
+          );
+        }
+        break;
+      case FSOP_COPY:
+        LOG_ERROR_ARGS(
+          ERR_LEVEL_INFO,
+          "%s %s: copying from %s to %s",
+          o->op,
+          o->pkg,
+          o->copy.from,
+          o->copy.to
+        );
+        if (!dry_run && copy_file(o->copy.from, o->copy.to) != 0) {
+          LOG_ERROR_ARGS(
+            ERR_LEVEL_ERROR,
+            "%s %s: failed to copy file %s to %s: %s",
+            o->op,
+            o->pkg,
+            o->copy.from,
+            o->copy.to,
+            strerror(errno)
+          );
+        }
+        break;
+      case FSOP_CREATEFILE:
+        LOG_ERROR_ARGS(
+          ERR_LEVEL_INFO,
+          "%s %s: extracting file to %s",
+          o->op,
+          o->pkg,
+          o->createfile.path
+        );
+        if (
+          !dry_run
+          && !mz_zip_reader_extract_to_file(
+            o->createfile.zip,
+            o->createfile.file_index,
+            o->createfile.path,
+            0
+          )
+        ) {
+          LOG_ERROR_ARGS(
+            ERR_LEVEL_ERROR,
+            "%s %s: could not extract file %s: %s",
+            o->op,
+            o->pkg,
+            o->createfile.path,
+            mz_zip_get_error_string(mz_zip_get_last_error(o->createfile.zip))
+          );
+        }
+        break;
 
-    case FSOP_REMOVEFILE:
-      LOG_ERROR_ARGS(ERR_LEVEL_INFO, "%s %s: removing file %s", o->op, o->pkg,
-                     o->removefile.path);
-      if (!dry_run && remove(o->removefile.path) != 0) {
-        LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "%s %s: could not remove file %s: %s",
-                       o->op, o->pkg, o->removefile.path, strerror(errno));
-      }
-      break;
-    case FSOP_MKDIR:
-      LOG_ERROR_ARGS(ERR_LEVEL_INFO, "%s %s: creating directory %s", o->op,
-                     o->pkg, o->mkdir.path);
-      if (!dry_run && mkdir_portable(o->mkdir.path, 0o755) != 0) {
-        LOG_ERROR_ARGS(ERR_LEVEL_ERROR,
-                       "%s %s: could not create directory %s: %s", o->op,
-                       o->pkg, o->mkdir.path, strerror(errno));
-      }
-      break;
-    case FSOP_RMDIR:
-      LOG_ERROR_ARGS(ERR_LEVEL_INFO, "%s %s: removing directory %s", o->op,
-                     o->pkg, o->rmdir.path);
-      if (!dry_run && rmdir_portable(o->rmdir.path) != 0) {
-        LOG_ERROR_ARGS(ERR_LEVEL_ERROR,
-                       "%s %s: could not remove directory %s: %s", o->op,
-                       o->pkg, o->rmdir.path, strerror(errno));
-      }
-      break;
+      case FSOP_REMOVEFILE:
+        LOG_ERROR_ARGS(
+          ERR_LEVEL_INFO,
+          "%s %s: removing file %s",
+          o->op,
+          o->pkg,
+          o->removefile.path
+        );
+        if (!dry_run && remove(o->removefile.path) != 0) {
+          LOG_ERROR_ARGS(
+            ERR_LEVEL_ERROR,
+            "%s %s: could not remove file %s: %s",
+            o->op,
+            o->pkg,
+            o->removefile.path,
+            strerror(errno)
+          );
+        }
+        break;
+      case FSOP_MKDIR:
+        LOG_ERROR_ARGS(
+          ERR_LEVEL_INFO,
+          "%s %s: creating directory %s",
+          o->op,
+          o->pkg,
+          o->mkdir.path
+        );
+        if (!dry_run && mkdir_portable(o->mkdir.path, 0o755) != 0) {
+          LOG_ERROR_ARGS(
+            ERR_LEVEL_ERROR,
+            "%s %s: could not create directory %s: %s",
+            o->op,
+            o->pkg,
+            o->mkdir.path,
+            strerror(errno)
+          );
+        }
+        break;
+      case FSOP_RMDIR:
+        LOG_ERROR_ARGS(
+          ERR_LEVEL_INFO,
+          "%s %s: removing directory %s",
+          o->op,
+          o->pkg,
+          o->rmdir.path
+        );
+        if (!dry_run && rmdir_portable(o->rmdir.path) != 0) {
+          LOG_ERROR_ARGS(
+            ERR_LEVEL_ERROR,
+            "%s %s: could not remove directory %s: %s",
+            o->op,
+            o->pkg,
+            o->rmdir.path,
+            strerror(errno)
+          );
+        }
+        break;
     }
   }
 }
@@ -99,27 +169,29 @@ static bool is_match(FileStatus fs, FileClaim claim) {
 
 // compute the status of the actual file wrt the package claims
 static ErrVal compute_match_status(
-    fileindex_t *index,
-    // for logging only
-    const char *op,
-    // package
-    const char *package,
-    // path to the file we're considering (relative to sysroot)
-    char *fullpath,
-    // the corresponding fileclaim
-    FileClaim claim,
+  fileindex_t *index,
+  // for logging only
+  const char *op,
+  // package
+  const char *package,
+  // path to the file we're considering (relative to sysroot)
+  char *fullpath,
+  // the corresponding fileclaim
+  FileClaim claim,
 
-    // sets these 3 bools.
-    bool *exists, bool *matchesus, bool *matchesother,
-    // if matchesother is true, sets this string (borrowed from index)
-    char **otherpackage) {
+  // sets these 3 bools.
+  bool *exists,
+  bool *matchesus,
+  bool *matchesother,
+  // if matchesother is true, sets this string (borrowed from index)
+  char **otherpackage
+) {
   *exists = false;
   *matchesus = false;
   *matchesother = false;
   *otherpackage = NULL;
 
-  FileStatus *filestatus =
-      fileindex_ensure_actual(index, fullpath, op, package);
+  FileStatus *filestatus = fileindex_ensure_actual(index, fullpath, op, package);
   if (filestatus == NULL) {
     // something went wrong, bail
     return ERR_UNKNOWN;
@@ -157,14 +229,16 @@ static bool in_protected_paths(vec_char_ptr *protected_paths, char *path) {
 }
 
 void fsops_emit_mkdir(
-    // for logging only
-    const char *op, const char *pkg,
-    // takes ownership of path
-    char *path,
-    // appends to this
-    vec_fsop_t *fsops,
-    // simulates the behavior in fileindex
-    fileindex_t *index) {
+  // for logging only
+  const char *op,
+  const char *pkg,
+  // takes ownership of path
+  char *path,
+  // appends to this
+  vec_fsop_t *fsops,
+  // simulates the behavior in fileindex
+  fileindex_t *index
+) {
   fsop_t o = {.op = op, .pkg = strdup(pkg)};
   o.kind = FSOP_MKDIR;
   o.mkdir.path = path;
@@ -176,14 +250,18 @@ void fsops_emit_mkdir(
 }
 
 void fsops_emit_install(
-    // for logging only
-    const char *op, const char *pkg,
-    // takes ownership of path
-    char *path, FileClaim claim, mz_zip_archive *zip,
-    // appends to this
-    vec_fsop_t *fsops,
-    // simulates the behavior in fileindex
-    fileindex_t *index) {
+  // for logging only
+  const char *op,
+  const char *pkg,
+  // takes ownership of path
+  char *path,
+  FileClaim claim,
+  mz_zip_archive *zip,
+  // appends to this
+  vec_fsop_t *fsops,
+  // simulates the behavior in fileindex
+  fileindex_t *index
+) {
 
   if (claim.is_directory) {
     fsops_emit_mkdir(op, pkg, path, fsops, index);
@@ -237,12 +315,15 @@ ErrVal fsops_emit_mkdir_p( // logging only
 }
 
 void fsops_emit_rm(
-    // logging
-    const char *op, const char *pkg,
-    // takes ownership
-    char *path, vec_fsop_t *fsops,
-    // simulates the behavior in fileindex
-    fileindex_t *index) {
+  // logging
+  const char *op,
+  const char *pkg,
+  // takes ownership
+  char *path,
+  vec_fsop_t *fsops,
+  // simulates the behavior in fileindex
+  fileindex_t *index
+) {
   fsop_t o = {.op = op, .pkg = strdup(pkg)};
   o.kind = FSOP_REMOVEFILE;
   o.removefile.path = path;
@@ -253,10 +334,14 @@ void fsops_emit_rm(
   status->exists = false;
 }
 
-void fsops_emit_rmdir(const char *op, const char *pkg, char *path,
-                      vec_fsop_t *fsops,
-                      // simulates the behavior in fileindex
-                      fileindex_t *index) {
+void fsops_emit_rmdir(
+  const char *op,
+  const char *pkg,
+  char *path,
+  vec_fsop_t *fsops,
+  // simulates the behavior in fileindex
+  fileindex_t *index
+) {
   fsop_t o = {.op = op, .pkg = strdup(pkg)};
   o.kind = FSOP_RMDIR;
   o.rmdir.path = path;
@@ -267,12 +352,16 @@ void fsops_emit_rmdir(const char *op, const char *pkg, char *path,
   status->exists = false;
 }
 
-void fsops_emit_mv(const char *op, const char *pkg, char *from, char *to,
-                   vec_fsop_t *fsops, fileindex_t *index) {
-  fsop_t o = {.op = op,
-              .pkg = strdup(pkg),
-              .kind = FSOP_RENAME,
-              .rename = {.from = from, .to = to}};
+void fsops_emit_mv(
+  const char *op,
+  const char *pkg,
+  char *from,
+  char *to,
+  vec_fsop_t *fsops,
+  fileindex_t *index
+) {
+  fsop_t o =
+    {.op = op, .pkg = strdup(pkg), .kind = FSOP_RENAME, .rename = {.from = from, .to = to}};
   vec_fsop_t_push(fsops, &o);
 
   // these may alias
@@ -286,12 +375,15 @@ void fsops_emit_mv(const char *op, const char *pkg, char *from, char *to,
   tostatus->exists = true;
 }
 
-void fsops_emit_cp(const char *op, const char *pkg, char *from, char *to,
-                   vec_fsop_t *fsops, fileindex_t *index) {
-  fsop_t o = {.op = op,
-              .pkg = strdup(pkg),
-              .kind = FSOP_COPY,
-              .copy = {.from = from, .to = to}};
+void fsops_emit_cp(
+  const char *op,
+  const char *pkg,
+  char *from,
+  char *to,
+  vec_fsop_t *fsops,
+  fileindex_t *index
+) {
+  fsop_t o = {.op = op, .pkg = strdup(pkg), .kind = FSOP_COPY, .copy = {.from = from, .to = to}};
   vec_fsop_t_push(fsops, &o);
 
   // these may alias
@@ -307,28 +399,37 @@ void fsops_emit_cp(const char *op, const char *pkg, char *from, char *to,
 // it's not a protected path
 // doesn't log errors if it's not actually a directory. Only logs errors if we
 // fail to read a file
-ErrVal fsops_emit_rm_rf(const char *op, const char *pkg,
-                        // takes ownership
-                        char *path, vec_fsop_t *fsops,
-                        // simulates the behavior in fileindex
-                        fileindex_t *index
+ErrVal fsops_emit_rm_rf(
+  const char *op,
+  const char *pkg,
+  // takes ownership
+  char *path,
+  vec_fsop_t *fsops,
+  // simulates the behavior in fileindex
+  fileindex_t *index
 
 ) {
   switch (path_type_portable(path)) {
-  case PATH_TYPE_MISSING:
-    free(path);
-    return ERR_OK;
-  case PATH_TYPE_FILE:
-  case PATH_TYPE_OTHER:
-    fsops_emit_rm(op, pkg, path, fsops, index);
-    return ERR_OK;
-  case PATH_TYPE_ERROR:
-    LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "%s %s: could not stat %s: %s", op, pkg,
-                   path, strerror(errno));
-    free(path);
-    return ERR_NOSUCHFILE;
-  case PATH_TYPE_DIR:
-    break;
+    case PATH_TYPE_MISSING:
+      free(path);
+      return ERR_OK;
+    case PATH_TYPE_FILE:
+    case PATH_TYPE_OTHER:
+      fsops_emit_rm(op, pkg, path, fsops, index);
+      return ERR_OK;
+    case PATH_TYPE_ERROR:
+      LOG_ERROR_ARGS(
+        ERR_LEVEL_ERROR,
+        "%s %s: could not stat %s: %s",
+        op,
+        pkg,
+        path,
+        strerror(errno)
+      );
+      free(path);
+      return ERR_NOSUCHFILE;
+    case PATH_TYPE_DIR:
+      break;
   }
 
   vec_char_ptr dirs_to_visit;
@@ -354,8 +455,14 @@ ErrVal fsops_emit_rm_rf(const char *op, const char *pkg,
     vec_char_ptr_push(&dirs_visited, &p);
 
     if (listdir_portable(p, &file_entries, &dir_entries) != 0) {
-      LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "%s %s: unable to list files in %s: %s",
-                     op, pkg, p, strerror(errno));
+      LOG_ERROR_ARGS(
+        ERR_LEVEL_ERROR,
+        "%s %s: unable to list files in %s: %s",
+        op,
+        pkg,
+        p,
+        strerror(errno)
+      );
       return ERR_NOSUCHFILE;
     }
 
@@ -386,9 +493,11 @@ ErrVal fsops_emit_rm_rf(const char *op, const char *pkg,
 // always mallocs
 // note that only one diversion may be applied per path. This is fine for
 // .zpknew
-static char *maybe_divert_path(const char *path,
-                               vec_char_ptr *src_diverted_prefixes,
-                               vec_char_ptr *dest_diverted_prefixes) {
+static char *maybe_divert_path(
+  const char *path,
+  vec_char_ptr *src_diverted_prefixes,
+  vec_char_ptr *dest_diverted_prefixes
+) {
   size_t diversions_len = vec_char_ptr_len(src_diverted_prefixes);
   assert(vec_char_ptr_len(dest_diverted_prefixes) == diversions_len);
   for (size_t i = 0; i < diversions_len; i++) {
@@ -396,8 +505,10 @@ static char *maybe_divert_path(const char *path,
     char *dest_prefix = *vec_char_ptr_at(dest_diverted_prefixes, i);
 
     size_t prefix_strlen = strlen(src_prefix);
-    if (strncmp(path, src_prefix, prefix_strlen) == 0 &&
-        (path[prefix_strlen] == '/' || path[prefix_strlen] == '\0')) {
+    if (
+      strncmp(path, src_prefix, prefix_strlen) == 0
+      && (path[prefix_strlen] == '/' || path[prefix_strlen] == '\0')
+    ) {
       return joinstr2(dest_prefix, path + prefix_strlen);
     }
   }
@@ -405,35 +516,41 @@ static char *maybe_divert_path(const char *path,
 }
 
 ErrVal fsops_emit_install_package(
-    //
-    const char *op,
-    // the name of the package
-    const char *package,
-    // appends to this if the operation would succeed
-    vec_fsop_t *fsops,
-    // fsops refer to indexes in the zips. appends to this if the operation
-    // would succeed
-    vec_mz_zip_archive_ptr *zips,
-    // file index (for file conflict identification)
-    fileindex_t *index,
+  const char *op,
+  // the name of the package
+  const char *pkg,
+  // appends to this if the operation would succeed
+  vec_fsop_t *fsops,
+  // fsops refer to indexes in the zips. appends to this if the operation
+  // would succeed
+  vec_mz_zip_archive_ptr *zips,
+  // file index (for file conflict identification)
+  fileindex_t *index,
 
-    // zip file to install
-    char *package_path,
-    // where to install
-    char *sysroot,
-    // protected paths
-    vec_char_ptr *protected_paths,
-    // refuse to proceed if a duplicate exists
-    bool flag_duplicate) {
+  // zip file to install
+  char *package_path,
+  // where to install
+  char *sysroot,
+  // protected paths
+  vec_char_ptr *protected_paths,
+  // refuse to proceed if a duplicate exists
+  bool flag_duplicate
+) {
+
+  // avoid const problems
+  char *package = strdup(pkg);
+  defer free(package);
 
   bool changed_during_transaction = false;
-  if (flag_duplicate &&
-      fileindex_contains_package(index, package, &changed_during_transaction)) {
-    LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "install %s: package %s %s", package,
-                   package,
-                   changed_during_transaction
-                       ? "was already installed earlier in this transaction"
-                       : "is already installed");
+  if (flag_duplicate && fileindex_contains_package(index, package, &changed_during_transaction)) {
+    LOG_ERROR_ARGS(
+      ERR_LEVEL_ERROR,
+      "install %s: package %s %s",
+      package,
+      package,
+      changed_during_transaction ? "was already installed earlier in this transaction"
+                                 : "is already installed"
+    );
     return ERR_UNKNOWN;
   }
 
@@ -441,9 +558,14 @@ ErrVal fsops_emit_install_package(
   mz_zip_archive *pZip = malloc(sizeof(mz_zip_archive));
   mz_zip_zero_struct(pZip);
   if (!mz_zip_reader_init_file(pZip, package_path, 0)) {
-    LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "%s %s: could not open zip archive %s: %s",
-                   op, package, package_path,
-                   mz_zip_get_error_string(mz_zip_get_last_error(pZip)));
+    LOG_ERROR_ARGS(
+      ERR_LEVEL_ERROR,
+      "%s %s: could not open zip archive %s: %s",
+      op,
+      package,
+      package_path,
+      mz_zip_get_error_string(mz_zip_get_last_error(pZip))
+    );
     free(pZip);
     return ERR_UNKNOWN;
   }
@@ -473,38 +595,54 @@ ErrVal fsops_emit_install_package(
   char_ptr raw_path;
   FileClaim claim;
   while (llrb_char_ptr_fileclaim_iter_next(&iter, &raw_path, &claim)) {
-    char *path = maybe_divert_path(raw_path, &src_diverted_prefixes,
-                                   &dest_diverted_prefixes);
+    char *path = maybe_divert_path(raw_path, &src_diverted_prefixes, &dest_diverted_prefixes);
     defer free(path);
 
     bool exists;
     bool matchesus;
     bool matchesother;
     char *otherpackage = NULL;
-    compute_match_status(index, op, package, path, claim, &exists, &matchesus,
-                         &matchesother, &otherpackage);
+    compute_match_status(
+      index,
+      op,
+      package,
+      path,
+      claim,
+      &exists,
+      &matchesus,
+      &matchesother,
+      &otherpackage
+    );
 
     if (exists) {
       if (matchesus) {
         // already exists and matches us, do nothing
       } else if (matchesother) {
-        LOG_ERROR_ARGS(ERR_LEVEL_ERROR,
-                       "%s %s: file conflict on %s: file exists and matches %s",
-                       op, package, path, otherpackage);
+        LOG_ERROR_ARGS(
+          ERR_LEVEL_ERROR,
+          "%s %s: file conflict on %s: file exists and matches %s",
+          op,
+          package,
+          path,
+          otherpackage
+        );
         should_not_install = true;
       } else {
         if (in_protected_paths(protected_paths, path)) {
-          if (fsops_emit_rm_rf(op, package, joinstr2(path, ".zpknew"), &pkfsops,
-                               index) != ERR_OK) {
+          if (fsops_emit_rm_rf(op, package, joinstr2(path, ".zpknew"), &pkfsops, index) != ERR_OK) {
             should_not_install = true;
             continue;
           }
-          LOG_ERROR_ARGS(ERR_LEVEL_WARN,
-                         "%s %s: installing new %s as %s.zpknew (no match + "
-                         "in protected path)",
-                         op, package, path, path);
-          fsops_emit_install(op, package, joinstr2(path, ".zpknew"), claim,
-                             pZip, &pkfsops, index);
+          LOG_ERROR_ARGS(
+            ERR_LEVEL_WARN,
+            "%s %s: installing new %s as %s.zpknew (no match + "
+            "in protected path)",
+            op,
+            package,
+            path,
+            path
+          );
+          fsops_emit_install(op, package, joinstr2(path, ".zpknew"), claim, pZip, &pkfsops, index);
 
           // emit diversion for future files
           char *src = strdup(path);
@@ -512,24 +650,27 @@ ErrVal fsops_emit_install_package(
           vec_char_ptr_push(&src_diverted_prefixes, &src);
           vec_char_ptr_push(&dest_diverted_prefixes, &dest);
         } else {
-          LOG_ERROR_ARGS(ERR_LEVEL_WARN,
-                         "%s %s: renaming old %s to %s.zpksave (no match + "
-                         "not in protected path)",
-                         op, package, path, path);
-          if (fsops_emit_rm_rf(op, package, joinstr2(path, ".zpksave"),
-                               &pkfsops, index) != ERR_OK) {
+          LOG_ERROR_ARGS(
+            ERR_LEVEL_WARN,
+            "%s %s: renaming old %s to %s.zpksave (no match + "
+            "not in protected path)",
+            op,
+            package,
+            path,
+            path
+          );
+          if (
+            fsops_emit_rm_rf(op, package, joinstr2(path, ".zpksave"), &pkfsops, index) != ERR_OK
+          ) {
             should_not_install = true;
             continue;
           }
-          fsops_emit_mv(op, package, strdup(path), joinstr2(path, ".zpksave"),
-                        &pkfsops, index);
-          fsops_emit_install(op, package, strdup(path), claim, pZip, &pkfsops,
-                             index);
+          fsops_emit_mv(op, package, strdup(path), joinstr2(path, ".zpksave"), &pkfsops, index);
+          fsops_emit_install(op, package, strdup(path), claim, pZip, &pkfsops, index);
         }
       }
     } else {
-      fsops_emit_install(op, package, strdup(path), claim, pZip, &pkfsops,
-                         index);
+      fsops_emit_install(op, package, strdup(path), claim, pZip, &pkfsops, index);
     }
   }
 
@@ -550,45 +691,54 @@ ErrVal fsops_emit_install_package(
 }
 
 ErrVal fsops_emit_uninstall_package(
-    //
-    const char *op,
-    // the name of the package
-    const char *package,
-    // appends to this if the operation would succeed
-    vec_fsop_t *fsops,
-    // file index (for file conflict identification)
-    fileindex_t *index,
-    // zip file to uninstall
-    char *package_path,
-    // where to uninstall
-    char *sysroot,
-    // protected paths
-    vec_char_ptr *protected_paths) {
+  //
+  const char *op,
+  // the name of the package
+  const char *package,
+  // appends to this if the operation would succeed
+  vec_fsop_t *fsops,
+  // file index (for file conflict identification)
+  fileindex_t *index,
+  // zip file to uninstall
+  char *package_path,
+  // where to uninstall
+  char *sysroot,
+  // protected paths
+  vec_char_ptr *protected_paths
+) {
   bool changed_during_transaction = false;
-  if (!fileindex_contains_package(index, package,
-                                  &changed_during_transaction)) {
-    LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "%s %s: package %s %s", op, package,
-                   package,
-                   changed_during_transaction
-                       ? "would be uninstalled earlier during this transaction"
-                       : "is not currently installed");
+  if (!fileindex_contains_package(index, package, &changed_during_transaction)) {
+    LOG_ERROR_ARGS(
+      ERR_LEVEL_ERROR,
+      "%s %s: package %s %s",
+      op,
+      package,
+      package,
+      changed_during_transaction ? "would be uninstalled earlier during this transaction"
+                                 : "is not currently installed"
+    );
     return ERR_UNKNOWN;
   }
 
-  mz_zip_archive *pZip = malloc(sizeof(mz_zip_archive));
-  mz_zip_zero_struct(pZip);
-  if (!mz_zip_reader_init_file(pZip, package_path, 0)) {
-    LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "%s %s: could not open zip archive %s: %s",
-                   op, package, package_path,
-                   mz_zip_get_error_string(mz_zip_get_last_error(pZip)));
-    free(pZip);
+  mz_zip_archive *zip = malloc(sizeof(mz_zip_archive));
+  mz_zip_zero_struct(zip);
+  if (!mz_zip_reader_init_file(zip, package_path, 0)) {
+    LOG_ERROR_ARGS(
+      ERR_LEVEL_ERROR,
+      "%s %s: could not open zip archive %s: %s",
+      op,
+      package,
+      package_path,
+      mz_zip_get_error_string(mz_zip_get_last_error(zip))
+    );
+    free(zip);
     return ERR_UNKNOWN;
   }
   llrb_char_ptr_fileclaim claims;
-  fileclaims_collect(pZip, op, package, sysroot, &claims);
+  fileclaims_collect(zip, op, package, sysroot, &claims);
   defer fileclaims_delete(&claims);
-  mz_zip_reader_end(pZip);
-  free(pZip);
+  mz_zip_reader_end(zip);
+  free(zip);
 
   vec_fsop_t pkfsops;
   vec_fsop_t_init(&pkfsops);
@@ -605,8 +755,17 @@ ErrVal fsops_emit_uninstall_package(
     bool matchesus;
     bool matchesother;
     char *otherpackage = NULL;
-    compute_match_status(index, op, package, path, claim, &exists, &matchesus,
-                         &matchesother, &otherpackage);
+    compute_match_status(
+      index,
+      op,
+      package,
+      path,
+      claim,
+      &exists,
+      &matchesus,
+      &matchesother,
+      &otherpackage
+    );
 
     if (exists) {
       if (matchesus) {
@@ -623,19 +782,27 @@ ErrVal fsops_emit_uninstall_package(
           }
         }
       } else if (matchesother) {
-        LOG_ERROR_ARGS(ERR_LEVEL_WARN,
-                       "%s %s: file %s seems to match %s instead of "
-                       "this package. Leaving in place.",
-                       op, package, path, otherpackage);
+        LOG_ERROR_ARGS(
+          ERR_LEVEL_WARN,
+          "%s %s: file %s seems to match %s instead of "
+          "this package. Leaving in place.",
+          op,
+          package,
+          path,
+          otherpackage
+        );
       } else {
-        LOG_ERROR_ARGS(ERR_LEVEL_WARN,
-                       "%s %s: file %s does not match any package. "
-                       "Leaving in place.",
-                       op, package, path);
+        LOG_ERROR_ARGS(
+          ERR_LEVEL_WARN,
+          "%s %s: file %s does not match any package. "
+          "Leaving in place.",
+          op,
+          package,
+          path
+        );
       }
     } else {
-      LOG_ERROR_ARGS(ERR_LEVEL_WARN, "%s %s: file %s is already missing", op,
-                     package, path);
+      LOG_ERROR_ARGS(ERR_LEVEL_WARN, "%s %s: file %s is already missing", op, package, path);
     }
   }
 

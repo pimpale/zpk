@@ -1,5 +1,13 @@
 {
     "C_Cpp.intelliSenseEngine": "disabled",
     "clangd.path": "/usr/bin/clangd",
-    "makefile.configureOnOpen": false
+    "clangd.arguments": ["--clang-tidy", "--background-index"],
+    "makefile.configureOnOpen": false,
+    "[c]": {
+        "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd",
+        "editor.detectIndentation": false,
+        "editor.tabSize": 2,
+        "editor.insertSpaces": true,
+        "editor.rulers": [100]
+    }
 }

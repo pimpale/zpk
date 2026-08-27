@@ -1,0 +1,29 @@
+#ifndef tcpcompatlayer_error_h_INCLUDED
+#define tcpcompatlayer_error_h_INCLUDED
+
+typedef enum {
+  TCP_ERR_OK = 0,
+
+  TCP_ERR_INVALID_ARGUMENT,
+  TCP_ERR_OUT_OF_MEMORY,
+
+  TCP_ERR_HOST_NOT_FOUND,
+  TCP_ERR_DNS_TEMPORARY,
+  TCP_ERR_DNS_FAILURE,
+
+  TCP_ERR_CONNECTION_REFUSED,
+  TCP_ERR_CONNECTION_RESET,
+  TCP_ERR_CONNECTION_CLOSED,
+  TCP_ERR_HOST_UNREACHABLE,
+  TCP_ERR_NETWORK_UNREACHABLE,
+  TCP_ERR_TIMED_OUT,
+
+  TCP_ERR_NOT_INITIALIZED,
+  TCP_ERR_ADDRESS_UNSUPPORTED,
+  TCP_ERR_IO,
+  TCP_ERR_UNKNOWN,
+} TcpError;
+
+const char *tcpstrerror(TcpError error);
+
+#endif // tcpcompatlayer_error_h_INCLUDED

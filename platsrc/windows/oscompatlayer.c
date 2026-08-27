@@ -31,9 +31,7 @@ char *getcwd_portable(void) {
   // the Windows CRT allocates for us when given a NULL buffer
   char *cwd = _getcwd(NULL, 0);
   if (cwd == NULL) {
-    LOG_ERROR_ARGS(ERR_LEVEL_FATAL,
-                   "could not get current working directory: %s",
-                   strerror(errno));
+    LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "could not get current working directory: %s", strerror(errno));
     PANIC();
   }
   backslashes_to_slashes(cwd);
@@ -45,29 +43,31 @@ int mkdir_portable(const char *path, int mode) {
   return _mkdir(path);
 }
 
-int rmdir_portable(const char *path) { return _rmdir(path); }
+int rmdir_portable(const char *path) {
+  return _rmdir(path);
+}
 
 // maps a Win32 error code onto errno so callers can use strerror as usual
 static void set_errno_from_win32(DWORD error) {
   switch (error) {
-  case ERROR_FILE_NOT_FOUND:
-  case ERROR_PATH_NOT_FOUND:
-    errno = ENOENT;
-    break;
-  case ERROR_ACCESS_DENIED:
-  case ERROR_SHARING_VIOLATION:
-    errno = EACCES;
-    break;
-  case ERROR_ALREADY_EXISTS:
-  case ERROR_FILE_EXISTS:
-    errno = EEXIST;
-    break;
-  case ERROR_NOT_SAME_DEVICE:
-    errno = EXDEV;
-    break;
-  default:
-    errno = EINVAL;
-    break;
+    case ERROR_FILE_NOT_FOUND:
+    case ERROR_PATH_NOT_FOUND:
+      errno = ENOENT;
+      break;
+    case ERROR_ACCESS_DENIED:
+    case ERROR_SHARING_VIOLATION:
+      errno = EACCES;
+      break;
+    case ERROR_ALREADY_EXISTS:
+    case ERROR_FILE_EXISTS:
+      errno = EEXIST;
+      break;
+    case ERROR_NOT_SAME_DEVICE:
+      errno = EXDEV;
+      break;
+    default:
+      errno = EINVAL;
+      break;
   }
 }
 
@@ -98,20 +98,17 @@ int rename_portable(const char *oldpath, const char *newpath) {
 static void listdir_push(vec_char_ptr *out, const char *name) {
   char *copy = strdup(name);
   if (copy == NULL) {
-    LOG_ERROR(ERR_LEVEL_FATAL,
-              "could not allocate memory for directory listing");
+    LOG_ERROR(ERR_LEVEL_FATAL, "could not allocate memory for directory listing");
     PANIC();
   }
   vec_char_ptr_push(out, &copy);
 }
 
-int listdir_portable(const char *path, vec_char_ptr *out_files,
-                     vec_char_ptr *out_dirs) {
+int listdir_portable(const char *path, vec_char_ptr *out_files, vec_char_ptr *out_dirs) {
   // FindFirstFile takes a pattern, not a directory
   char *pattern;
   if (asprintf(&pattern, "%s/*", path) < 0) {
-    LOG_ERROR(ERR_LEVEL_FATAL,
-              "could not allocate memory for directory listing");
+    LOG_ERROR(ERR_LEVEL_FATAL, "could not allocate memory for directory listing");
     PANIC();
   }
   WIN32_FIND_DATAA find_data;
@@ -127,13 +124,11 @@ int listdir_portable(const char *path, vec_char_ptr *out_files,
     return -1;
   }
   do {
-    if (strcmp(find_data.cFileName, ".") != 0 &&
-        strcmp(find_data.cFileName, "..") != 0) {
+    if (strcmp(find_data.cFileName, ".") != 0 && strcmp(find_data.cFileName, "..") != 0) {
       // reparse points (symlinks, junctions) count as files even when the
       // directory attribute is also set
-      bool is_dir =
-          (find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 &&
-          (find_data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0;
+      bool is_dir = (find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0
+        && (find_data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0;
       vec_char_ptr *dest = is_dir ? out_dirs : out_files;
       if (dest != NULL) {
         listdir_push(dest, find_data.cFileName);
@@ -152,8 +147,7 @@ int listdir_portable(const char *path, vec_char_ptr *out_files,
 char *abspath_portable(const char *path) {
   char *full = _fullpath(NULL, path, 0);
   if (full == NULL) {
-    LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "could not resolve absolute path of %s",
-                   path);
+    LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "could not resolve absolute path of %s", path);
     PANIC();
   }
   // strip trailing \ if it has one unless it's a root path (eg C:\\)

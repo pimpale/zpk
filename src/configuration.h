@@ -10,7 +10,10 @@ typedef struct {
   char *sysroot;
   // the installed package dir
   // defaults to $sysroot/pkg
-  char *pkgs_path;
+  char *installed_pkgs_path;
+  // the cached package dir 
+  // defautls to $sysroot/pkgcache
+  char* cached_pkgs_path;
   // a list of repositories (in URI format)
   vec_char_ptr repositories;
   // See https://man.archlinux.org/man/apk-protected_paths.5.en

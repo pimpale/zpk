@@ -2,7 +2,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 
 #include "configuration.h"
 #include "error.h"
@@ -35,22 +34,20 @@ static int do_add(ZpkConfiguration *pConf, vec_char_ptr *packages,
   LOG_ERROR_ARGS(ERR_LEVEL_INFO, "installing %zu targets to %s",
                  vec_char_ptr_len(packages), pConf->sysroot);
 
-  // resolve packages to install
+  // resolve and download packages to install
   llrb_char_ptr_resolvedpackage resolved_packages;
   llrb_char_ptr_resolvedpackage_new(&resolved_packages);
   defer llrb_char_ptr_resolvedpackage_delete_and_freeowned(&resolved_packages);
 
-  // this happens immediately!
-  // dry run doesn't account for downloads btw.
   if (resolve_and_fetch_package_paths_repositories(
-          &resolved_packages, &pConf->repositories, packages, pConf->pkgs_path,
-          ".cached.zip", false) != ERR_OK) {
+          &resolved_packages, &pConf->repositories, packages,
+          pConf->cached_pkgs_path, false, true) != ERR_OK) {
     return 1;
   }
 
   // build index
   fileindex_t index;
-  fileindex_build(&index, pConf->sysroot, pConf->pkgs_path);
+  fileindex_build(&index, pConf->sysroot, pConf->installed_pkgs_path);
   defer fileindex_delete(&index);
 
   // contains the fsops of the actual write operation
@@ -74,8 +71,7 @@ static int do_add(ZpkConfiguration *pConf, vec_char_ptr *packages,
 
     // journal intent by moving the thing first. Then we can patch it up. if
     // there's a crash.
-    char *dest = replacesuf(rp.package_path, ".cached.zip", ".zip");
-    assert(dest != NULL);
+    char *dest = joinpath(pConf->cached_pkgs_path, basename_m(rp.package_path));
     fsops_emit_mv("install", rp.package, strdup(rp.package_path), dest, &fsops,
                   &index);
 
@@ -105,17 +101,15 @@ static int do_del(ZpkConfiguration *pConf, vec_char_ptr *packages,
   llrb_char_ptr_resolvedpackage_new(&resolved_packages);
   defer llrb_char_ptr_resolvedpackage_delete_and_freeowned(&resolved_packages);
 
-  if (resolve_package_paths_installed(&resolved_packages, pConf->pkgs_path,
-                                      packages, false) != ERR_OK) {
-    LOG_ERROR(
-        ERR_LEVEL_FATAL,
-        "failed to resolve package paths. The packages may not be installed.");
+  if (resolve_package_paths_installed(&resolved_packages,
+                                      pConf->installed_pkgs_path, packages,
+                                      false) != ERR_OK) {
     return 1;
   }
 
   // build index
   fileindex_t index;
-  fileindex_build(&index, pConf->sysroot, pConf->pkgs_path);
+  fileindex_build(&index, pConf->sysroot, pConf->installed_pkgs_path);
   defer fileindex_delete(&index);
 
   // contains the fsops of the actual write operation
@@ -141,9 +135,8 @@ static int do_del(ZpkConfiguration *pConf, vec_char_ptr *packages,
       continue;
     }
 
-    // if good to proceed rename back to cached package
-    char *dest = replacesuf(rp.package_path, ".zip", ".cached.zip");
-    assert(dest != NULL);
+    // if good to proceed remove the file from installed
+    char *dest = joinpath(pConf->cached_pkgs_path, basename_m(rp.package_path));
     fsops_emit_mv("uninstall", rp.package, strdup(rp.package_path), dest,
                   &fsops, &index);
   }
@@ -171,15 +164,15 @@ static int do_fix(ZpkConfiguration *pConf, vec_char_ptr *packages,
   llrb_char_ptr_resolvedpackage_new(&resolved_packages);
   defer llrb_char_ptr_resolvedpackage_delete_and_freeowned(&resolved_packages);
 
-  if (resolve_package_paths_installed(&resolved_packages, pConf->pkgs_path,
-                                      packages, true) != ERR_OK) {
-    LOG_ERROR(ERR_LEVEL_FATAL, "fix: failed to resolve package paths");
+  if (resolve_package_paths_installed(&resolved_packages,
+                                      pConf->installed_pkgs_path, packages,
+                                      true) != ERR_OK) {
     return 1;
   }
 
   // build index
   fileindex_t index;
-  fileindex_build(&index, pConf->sysroot, pConf->pkgs_path);
+  fileindex_build(&index, pConf->sysroot, pConf->installed_pkgs_path);
   defer fileindex_delete(&index);
 
   // create the fsops vec and the zips vec
@@ -222,10 +215,9 @@ static int do_list(ZpkConfiguration *pConf, bool only_installed,
   llrb_char_ptr_resolvedpackage_new(&installed_packages);
   defer llrb_char_ptr_resolvedpackage_delete_and_freeowned(&installed_packages);
 
-  if (resolve_package_paths_installed(&installed_packages, pConf->pkgs_path,
-                                      NULL, true) != ERR_OK) {
-    LOG_ERROR(ERR_LEVEL_FATAL,
-              "list: failed to resolve installed package paths");
+  if (resolve_package_paths_installed(&installed_packages,
+                                      pConf->installed_pkgs_path, NULL,
+                                      true) != ERR_OK) {
     return 1;
   }
 
@@ -236,9 +228,9 @@ static int do_list(ZpkConfiguration *pConf, bool only_installed,
   // if we are just doing --installed and nothing else, then we can omit
   // fetching important bc what if we're offline
   if (only_upgradable || only_available || only_orphaned || !only_installed) {
-    if (resolve_package_paths_repositories(
-            &available_packages, &pConf->repositories, NULL, true) != ERR_OK) {
-      LOG_ERROR(ERR_LEVEL_FATAL, "list: failed to resolve remote package paths");
+    if (resolve_and_fetch_package_paths_repositories(
+            &available_packages, &pConf->repositories, NULL,
+            pConf->cached_pkgs_path, true, false) != ERR_OK) {
       return 1;
     }
   }
@@ -300,7 +292,7 @@ static int do_list(ZpkConfiguration *pConf, bool only_installed,
 static int do_owner(ZpkConfiguration *pConf, char *path) {
   // build index
   fileindex_t index;
-  fileindex_build(&index, pConf->sysroot, pConf->pkgs_path);
+  fileindex_build(&index, pConf->sysroot, pConf->installed_pkgs_path);
   defer fileindex_delete(&index);
 
   char *abspath = abspath_portable(path);
