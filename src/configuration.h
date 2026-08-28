@@ -1,11 +1,11 @@
 #ifndef configuration_h_INCLUDED
 #define configuration_h_INCLUDED
 
-#include <stdbool.h>
-
 #include "instances/vec_char_ptr.h"
 
 typedef struct {
+  // can download files but do not commit transaction to filesystem
+  bool download_only;
   // where the packages are going to be installed to (defaults to /)
   char *sysroot;
   // the installed package dir
@@ -19,9 +19,13 @@ typedef struct {
   // See https://man.archlinux.org/man/apk-protected_paths.5.en
   // only supports + for now
   vec_char_ptr protected_paths;
+  // whether to actually verify ssl certificates
+  bool strict_ssl;
+  // the list of paths to PEM or CRT files. Will be trusted if something exists at that location.
+  vec_char_ptr cacert_paths;
 } ZpkConfiguration;
 
-void delete_ZpkConfiguration(ZpkConfiguration *config);
+void delete_zpkconfiguration(ZpkConfiguration *config);
 
 typedef enum {
   ZPK_OP_ADD,
@@ -62,8 +66,6 @@ typedef struct {
       char *path;
     } owner;
   };
-  bool dry_run; // if true, don't actually perform the operation, just print
-                // what would be done
 } ZpkOperation;
 
 // Parses argv and resolves the effective configuration in one shot; any
@@ -76,6 +78,6 @@ typedef struct {
 void parse_args(int argc, char **argv, ZpkConfiguration *config,
                 ZpkOperation *op);
 
-void delete_ZpkOperation(ZpkOperation *op);
+void delete_zpkoperation(ZpkOperation *op);
 
 #endif // configuration_h_INCLUDED

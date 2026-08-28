@@ -1,5 +1,8 @@
 #include "error.h"
 #include <errno.h>
+#include <fcntl.h>
+#include <io.h>
+#include <stdint.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
@@ -71,7 +74,7 @@ static void set_errno_from_win32(DWORD error) {
   }
 }
 
-path_type path_type_portable(const char *path) {
+PathType path_type_portable(const char *path) {
   DWORD attrs = GetFileAttributesA(path);
   if (attrs == INVALID_FILE_ATTRIBUTES) {
     DWORD error = GetLastError();
@@ -158,4 +161,58 @@ char *abspath_portable(const char *path) {
   }
   backslashes_to_slashes(full);
   return full;
+}
+
+FILE *fopen_nolock_portable(const char *restrict filename, const char *restrict modes) {
+  if (filename == NULL || modes == NULL) {
+    errno = EINVAL;
+    return NULL;
+  }
+
+  DWORD access;
+  DWORD creation;
+  int descriptor_flags;
+  if (strcmp(modes, "rb") == 0) {
+    access = GENERIC_READ;
+    creation = OPEN_EXISTING;
+    descriptor_flags = _O_RDONLY | _O_BINARY;
+  } else if (strcmp(modes, "wb") == 0) {
+    access = GENERIC_WRITE;
+    creation = CREATE_ALWAYS;
+    descriptor_flags = _O_WRONLY | _O_BINARY;
+  } else {
+    errno = EINVAL;
+    return NULL;
+  }
+
+  HANDLE handle = CreateFileA(
+    filename,
+    access,
+    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+    NULL,
+    creation,
+    FILE_ATTRIBUTE_NORMAL,
+    NULL
+  );
+  if (handle == INVALID_HANDLE_VALUE) {
+    set_errno_from_win32(GetLastError());
+    return NULL;
+  }
+
+  int descriptor = _open_osfhandle((intptr_t)handle, descriptor_flags);
+  if (descriptor == -1) {
+    int saved_errno = errno;
+    CloseHandle(handle);
+    errno = saved_errno;
+    return NULL;
+  }
+
+  FILE *stream = _fdopen(descriptor, modes);
+  if (stream == NULL) {
+    int saved_errno = errno;
+    // _open_osfhandle transferred ownership of handle to descriptor.
+    _close(descriptor);
+    errno = saved_errno;
+  }
+  return stream;
 }

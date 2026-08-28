@@ -52,7 +52,7 @@ int rmdir_portable(const char *path) {
   return rmdir(path);
 }
 
-path_type path_type_portable(const char *path) {
+PathType path_type_portable(const char *path) {
   struct stat st;
   if (stat(path, &st) != 0) {
     // ENOTDIR: a parent component exists but is a file, so path can't exist
@@ -209,4 +209,13 @@ char *abspath_portable(const char *path) {
   char *cleaned = cleanpath(joined);
   free(joined);
   return cleaned;
+}
+
+FILE *fopen_nolock_portable(const char *restrict filename, const char *restrict modes) {
+  if (filename == NULL || modes == NULL
+      || (strcmp(modes, "rb") != 0 && strcmp(modes, "wb") != 0)) {
+    errno = EINVAL;
+    return NULL;
+  }
+  return fopen(filename, modes);
 }

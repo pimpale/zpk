@@ -1,7 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "tcpcompatlayer.h"
-
 #include <errno.h>
 #include <netdb.h>
 #include <stdlib.h>
@@ -110,7 +109,7 @@ void tcp_close_portable(TcpSocket *socket) {
   free(socket);
 }
 
-TcpError tcp_recv_portable(TcpSocket *socket, size_t *recvd, char *buf, size_t buflen) {
+TcpError tcp_recv_portable(TcpSocket *socket, size_t *recvd, unsigned char *buf, size_t buflen) {
   if (socket == NULL || recvd == NULL || (buf == NULL && buflen != 0)) {
     return TCP_ERR_INVALID_ARGUMENT;
   }
@@ -136,7 +135,7 @@ TcpError tcp_recv_portable(TcpSocket *socket, size_t *recvd, char *buf, size_t b
   }
 }
 
-TcpError tcp_send_portable(TcpSocket *socket, size_t *sent, const char *buf, size_t buflen) {
+TcpError tcp_send_portable(TcpSocket *socket, size_t *sent, const unsigned char *buf, size_t buflen) {
   if (socket == NULL || sent == NULL || (buf == NULL && buflen != 0)) {
     return TCP_ERR_INVALID_ARGUMENT;
   }

@@ -11,9 +11,9 @@
 
 #include <toml/toml.h>
 
-static const char *SYSTEM_CONFIG_PATH = "/etc/zpk.ini";
-static const char *USER_CONFIG_PATH = "~/.zpk.ini";
-static const char *CONFIGURATION_FILE_NAME = ".zpk.ini";
+#define SYSTEM_CONFIG_PATH "/etc/zpk.ini"
+#define USER_CONFIG_PATH "~/.zpk.ini"
+#define CONFIGURATION_FILE_NAME ".zpk.ini"
 
 // allocates
 static char *resolve_config_relative(const char *config_path, const char *raw) {
@@ -42,37 +42,51 @@ static char *resolve_config_relative(const char *config_path, const char *raw) {
 // validates one apk-style protected path rule from config key `key` and
 // appends a copy to out. rules are sysroot-relative masks, so unlike
 // repositories they are never resolved against the config file's directory
-static void push_protected_path(vec_char_ptr *out, const char *config_path,
-                                const char *key, const TomlValue *elem) {
+static void push_protected_path(
+  vec_char_ptr *out,
+  const char *config_path,
+  const char *key,
+  const TomlValue *elem
+) {
   if (elem->type != TOML_STRING) {
     LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "%s: %s must be strings", config_path, key);
     PANIC();
   }
   const char *rule = elem->value.string->str;
   if (rule[0] != '+' || rule[1] == '\0') {
-    LOG_ERROR_ARGS(ERR_LEVEL_FATAL,
-                   "%s: %s: rule \"%s\" must be '+' followed by a path "
-                   "('+' is the only supported protection mode)",
-                   config_path, key, rule);
+    LOG_ERROR_ARGS(
+      ERR_LEVEL_FATAL,
+      "%s: %s: rule \"%s\" must be '+' followed by a path "
+      "('+' is the only supported protection mode)",
+      config_path,
+      key,
+      rule
+    );
     PANIC();
   }
   char_ptr copy = strdup(rule);
   vec_char_ptr_push(out, &copy);
 }
 
-static void maybe_apply_config_file(ZpkConfiguration *config, const char *path,
-                                    bool cli_specified) {
+static void
+maybe_apply_config_file(ZpkConfiguration *config, const char *path, bool cli_specified) {
   FILE *maybe_file = fopen(path, "r");
   if (maybe_file == NULL) {
     if (cli_specified) {
-      LOG_ERROR_ARGS(ERR_LEVEL_FATAL,
-                     "could not open specified config file %s: %s", path,
-                     strerror(errno));
+      LOG_ERROR_ARGS(
+        ERR_LEVEL_FATAL,
+        "could not open specified config file %s: %s",
+        path,
+        strerror(errno)
+      );
       PANIC();
     } else {
-      LOG_ERROR_ARGS(ERR_LEVEL_DEBUG,
-                     "could not open potential conf location %s: %s", path,
-                     strerror(errno));
+      LOG_ERROR_ARGS(
+        ERR_LEVEL_DEBUG,
+        "could not open potential conf location %s: %s",
+        path,
+        strerror(errno)
+      );
       return;
     }
   }
@@ -82,8 +96,7 @@ static void maybe_apply_config_file(ZpkConfiguration *config, const char *path,
   TomlTable *table = toml_load_file_filename(maybe_file, path);
   fclose(maybe_file);
   if (table == NULL) {
-    LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "could not parse %s: %s", path,
-                   toml_err()->message);
+    LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "could not parse %s: %s", path, toml_err()->message);
     PANIC();
   }
 
@@ -95,39 +108,45 @@ static void maybe_apply_config_file(ZpkConfiguration *config, const char *path,
     }
     free(config->sysroot);
     config->sysroot = resolve_config_relative(path, val->value.string->str);
-    LOG_ERROR_ARGS(ERR_LEVEL_DEBUG, "%s: sysroot set to %s", path,
-                   config->sysroot);
+    LOG_ERROR_ARGS(ERR_LEVEL_DEBUG, "%s: sysroot set to %s", path, config->sysroot);
   }
 
-  val = toml_table_get(table, "installed_pkgs_path");
+  val = toml_table_get(table, "installed-pkgs-path");
   if (val != NULL) {
     if (val->type != TOML_STRING) {
-      LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "%s: installed_pkgs_path must be a string", path);
+      LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "%s: installed-pkgs-path must be a string", path);
       PANIC();
     }
     free(config->installed_pkgs_path);
     config->installed_pkgs_path = resolve_config_relative(path, val->value.string->str);
-    LOG_ERROR_ARGS(ERR_LEVEL_DEBUG, "%s: installed_pkgs_path set to %s", path,
-                   config->installed_pkgs_path);
+    LOG_ERROR_ARGS(
+      ERR_LEVEL_DEBUG,
+      "%s: installed-pkgs-path set to %s",
+      path,
+      config->installed_pkgs_path
+    );
   }
 
-  val = toml_table_get(table, "cached_pkgs_path");
+  val = toml_table_get(table, "cached-pkgs-path");
   if (val != NULL) {
     if (val->type != TOML_STRING) {
-      LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "%s: cached_pkgs_path must be a string", path);
+      LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "%s: cached-pkgs-path must be a string", path);
       PANIC();
     }
     free(config->cached_pkgs_path);
     config->cached_pkgs_path = resolve_config_relative(path, val->value.string->str);
-    LOG_ERROR_ARGS(ERR_LEVEL_DEBUG, "%s: cached_pkgs_path set to %s", path,
-                   config->cached_pkgs_path);
+    LOG_ERROR_ARGS(
+      ERR_LEVEL_DEBUG,
+      "%s: cached-pkgs-path set to %s",
+      path,
+      config->cached_pkgs_path
+    );
   }
 
   val = toml_table_get(table, "repositories");
   if (val != NULL) {
     if (val->type != TOML_ARRAY) {
-      LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "%s: repositories must be an array",
-                     path);
+      LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "%s: repositories must be an array", path);
       PANIC();
     }
     // repositories (and not extra repositories) means that we replace any
@@ -137,22 +156,19 @@ static void maybe_apply_config_file(ZpkConfiguration *config, const char *path,
     for (size_t i = 0; i < val->value.array->len; i++) {
       TomlValue *elem = val->value.array->elements[i];
       if (elem->type != TOML_STRING) {
-        LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "%s: repositories must be strings",
-                       path);
+        LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "%s: repositories must be strings", path);
         PANIC();
       }
       char_ptr repo = resolve_config_relative(path, elem->value.string->str);
       vec_char_ptr_push(&config->repositories, &repo);
-      LOG_ERROR_ARGS(ERR_LEVEL_DEBUG, "%s: repositories vector: added %s", path,
-                     repo);
+      LOG_ERROR_ARGS(ERR_LEVEL_DEBUG, "%s: repositories vector: added %s", path, repo);
     }
   }
 
   val = toml_table_get(table, "extra-repositories");
   if (val != NULL) {
     if (val->type != TOML_ARRAY) {
-      LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "%s: extra-repositories must be an array",
-                     path);
+      LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "%s: extra-repositories must be an array", path);
       PANIC();
     }
     // extra-repositories (and not repositories) means that we append, and keep
@@ -160,45 +176,82 @@ static void maybe_apply_config_file(ZpkConfiguration *config, const char *path,
     for (size_t i = 0; i < val->value.array->len; i++) {
       TomlValue *elem = val->value.array->elements[i];
       if (elem->type != TOML_STRING) {
-        LOG_ERROR_ARGS(ERR_LEVEL_FATAL,
-                       "%s: extra-repositories must be strings", path);
+        LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "%s: extra-repositories must be strings", path);
         PANIC();
       }
       char_ptr repo = resolve_config_relative(path, elem->value.string->str);
       vec_char_ptr_push(&config->repositories, &repo);
-      LOG_ERROR_ARGS(ERR_LEVEL_DEBUG, "%s: repositories vector: added %s", path,
-                     repo);
+      LOG_ERROR_ARGS(ERR_LEVEL_DEBUG, "%s: repositories vector: added %s", path, repo);
     }
   }
 
   val = toml_table_get(table, "protected-paths");
   if (val != NULL) {
     if (val->type != TOML_ARRAY) {
-      LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "%s: protected-paths must be an array",
-                     path);
+      LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "%s: protected-paths must be an array", path);
       PANIC();
     }
     // protected-paths (and not extra-protected-paths) replaces any rules
     // from lower-precedence config files
     vec_char_ptr_clear_and_freeowned(&config->protected_paths);
     for (size_t i = 0; i < val->value.array->len; i++) {
-      push_protected_path(&config->protected_paths, path, "protected-paths",
-                          val->value.array->elements[i]);
+      push_protected_path(
+        &config->protected_paths,
+        path,
+        "protected-paths",
+        val->value.array->elements[i]
+      );
     }
   }
 
   val = toml_table_get(table, "extra-protected-paths");
   if (val != NULL) {
     if (val->type != TOML_ARRAY) {
-      LOG_ERROR_ARGS(ERR_LEVEL_FATAL,
-                     "%s: extra-protected-paths must be an array", path);
+      LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "%s: extra-protected-paths must be an array", path);
       PANIC();
     }
-    // extra-protected-paths appends, keeping the rules that are already there
     for (size_t i = 0; i < val->value.array->len; i++) {
-      push_protected_path(&config->protected_paths, path,
-                          "extra-protected-paths",
-                          val->value.array->elements[i]);
+      push_protected_path(
+        &config->protected_paths,
+        path,
+        "extra-protected-paths",
+        val->value.array->elements[i]
+      );
+    }
+  }
+
+  val = toml_table_get(table, "cacert-paths");
+  if (val != NULL) {
+    if (val->type != TOML_ARRAY) {
+      LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "%s: cacert-paths must be an array", path);
+      PANIC();
+    }
+    vec_char_ptr_clear_and_freeowned(&config->cacert_paths);
+    for (size_t i = 0; i < val->value.array->len; i++) {
+      TomlValue *elem = val->value.array->elements[i];
+      if (elem->type != TOML_STRING) {
+        LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "%s: cacert-paths must be strings", path);
+        PANIC();
+      }
+      char_ptr cacert = resolve_config_relative(path, elem->value.string->str);
+      vec_char_ptr_push(&config->cacert_paths, &cacert);
+    }
+  }
+
+  val = toml_table_get(table, "extra-cacert-paths");
+  if (val != NULL) {
+    if (val->type != TOML_ARRAY) {
+      LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "%s: extra-cacert-paths must be an array", path);
+      PANIC();
+    }
+    for (size_t i = 0; i < val->value.array->len; i++) {
+      TomlValue *elem = val->value.array->elements[i];
+      if (elem->type != TOML_STRING) {
+        LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "%s: extra-cacert-paths must be strings", path);
+        PANIC();
+      }
+      char_ptr cacert = resolve_config_relative(path, elem->value.string->str);
+      vec_char_ptr_push(&config->cacert_paths, &cacert);
     }
   }
 
@@ -206,10 +259,10 @@ static void maybe_apply_config_file(ZpkConfiguration *config, const char *path,
 }
 
 // splits a comma-separated environment value and appends each entry to `out`.
-// unlike a command line, nothing has expanded tildes for us here, so we do it.
-static void push_env_repositories(vec_char_ptr *out, const char *env) {
+// expand tildes
+static void push_env_pathlist(vec_char_ptr *out, const char *env, const char *delim) {
   char *dup = strdup(env);
-  for (char *tok = strtok(dup, ","); tok != NULL; tok = strtok(NULL, ",")) {
+  for (char *tok = strtok(dup, delim); tok != NULL; tok = strtok(NULL, delim)) {
     if (*tok == '\0') {
       continue;
     }
@@ -235,31 +288,48 @@ static void apply_env_config(ZpkConfiguration *config) {
   env = getenv("ZPK_CACHED_PKGS_PATH");
   if (env != NULL) {
     free(config->cached_pkgs_path);
-    config->installed_pkgs_path = expandtilde(env);
+    config->cached_pkgs_path = expandtilde(env);
   }
 
-  // comma-separated list; replaces any file-configured repositories
   env = getenv("ZPK_REPOSITORIES");
   if (env != NULL) {
     vec_char_ptr_clear_and_freeowned(&config->repositories);
-    push_env_repositories(&config->repositories, env);
+    push_env_pathlist(&config->repositories, env, ",");
   }
 
-  // comma-separated list; extends any file-configured repositories
   env = getenv("ZPK_EXTRA_REPOSITORIES");
   if (env != NULL) {
-    push_env_repositories(&config->repositories, env);
+    push_env_pathlist(&config->repositories, env, ",");
+  }
+
+  env = getenv("ZPK_CACERT_PATHS");
+  if (env != NULL) {
+    vec_char_ptr_clear_and_freeowned(&config->cacert_paths);
+    push_env_pathlist(&config->cacert_paths, env, ",");
+  }
+
+  env = getenv("ZPK_EXTRA_CACERT_PATHS");
+  if (env != NULL) {
+    push_env_pathlist(&config->cacert_paths, env, ",");
   }
 }
 
-static void resolve_configuration(ZpkConfiguration *config,
-                                  const char *cli_config,
-                                  const char *cli_sysroot,
-                                  vec_char_ptr *cli_extra_repositories) {
+static void resolve_configuration(
+  ZpkConfiguration *config,
+  const char *cli_config,
+  const char *cli_sysroot,
+  const bool *cli_check_certificate,
+  const bool *cli_simulate,
+  vec_char_ptr *cli_extra_repositories
+) {
   config->sysroot = NULL;
   config->installed_pkgs_path = NULL;
+  config->cached_pkgs_path = NULL;
+  config->strict_ssl = true;
+  config->download_only = false;
   vec_char_ptr_init(&config->repositories);
   vec_char_ptr_init(&config->protected_paths);
+  vec_char_ptr_init(&config->cacert_paths);
 
   // we check in reverse order of precedence, so that later sources override
   // earlier ones.
@@ -320,16 +390,31 @@ static void resolve_configuration(ZpkConfiguration *config,
     config->sysroot = strdup(cli_sysroot);
   }
 
+  if (cli_check_certificate != NULL) {
+    config->strict_ssl = *cli_check_certificate;
+  }
+  if (cli_simulate != NULL) {
+    config->download_only = *cli_simulate;
+  }
+
   if (config->sysroot == NULL) {
     config->sysroot = strdup("/");
   }
 
   if (config->installed_pkgs_path == NULL) {
     size_t sysroot_len = strlen(config->sysroot);
-    bool trailing_slash =
-        sysroot_len > 0 && config->sysroot[sysroot_len - 1] == '/';
-    asprintf(&config->installed_pkgs_path, trailing_slash ? "%spkg" : "%s/pkg",
-             config->sysroot);
+    bool trailing_slash = sysroot_len > 0 && config->sysroot[sysroot_len - 1] == '/';
+    asprintf(&config->installed_pkgs_path, trailing_slash ? "%spkg" : "%s/pkg", config->sysroot);
+  }
+
+  if (config->cached_pkgs_path == NULL) {
+    size_t sysroot_len = strlen(config->sysroot);
+    bool trailing_slash = sysroot_len > 0 && config->sysroot[sysroot_len - 1] == '/';
+    asprintf(
+      &config->cached_pkgs_path,
+      trailing_slash ? "%spkgcache" : "%s/pkgcache",
+      config->sysroot
+    );
   }
 
   char *resolved = abspath_portable(config->sysroot);
@@ -338,6 +423,9 @@ static void resolve_configuration(ZpkConfiguration *config,
   resolved = abspath_portable(config->installed_pkgs_path);
   free(config->installed_pkgs_path);
   config->installed_pkgs_path = resolved;
+  resolved = abspath_portable(config->cached_pkgs_path);
+  free(config->cached_pkgs_path);
+  config->cached_pkgs_path = resolved;
 
   if (cli_extra_repositories != NULL) {
     // -X/--repository appends (like in apk)
@@ -346,36 +434,44 @@ static void resolve_configuration(ZpkConfiguration *config,
       vec_char_ptr_push(&config->repositories, &repo);
     }
   }
+
+  if (!config->strict_ssl) {
+    LOG_ERROR(
+      ERR_LEVEL_WARN,
+      "certificate validation is disabled; downloads are not protected against tampering"
+    );
+  }
 }
 
-void delete_ZpkConfiguration(ZpkConfiguration *config) {
+void delete_zpkconfiguration(ZpkConfiguration *config) {
   free(config->sysroot);
   free(config->installed_pkgs_path);
   free(config->cached_pkgs_path);
   vec_char_ptr_delete_and_freeowned(&config->repositories);
   vec_char_ptr_delete_and_freeowned(&config->protected_paths);
+  vec_char_ptr_delete_and_freeowned(&config->cacert_paths);
 }
 
 static const char *USAGE =
-    "usage: zpk [options] <command> [args]\n"
-    "\n"
-    "commands:\n"
-    "  add <pkg>...             install packages\n"
-    "  del <pkg>...             uninstall packages\n"
-    "  fetch [-o DIR] <pkg>...  download packages without installing\n"
-    "  upgrade [pkg...]         upgrade packages (all if none given)\n"
-    "  fix [pkg...]             reinstall broken packages (all if none given)\n"
-    "  list [-I] [-u] [-a] [-O] list installed/upgradable/available/orphaned "
-    "packages\n"
-    "  info -W <path>           show which package owns a path\n"
-    "\n"
-    "global options:\n"
-    "  -p, --root DIR           install to alternate root\n"
-    "  -X, --repository URI     add a repository (repeatable)\n"
-    "      --config FILE        use FILE instead of searching for .zpk.ini\n"
-    "  -s, --simulate           simulate the operation; make no changes\n"
-    "  -v, --verbose            raise log level to info; -vv for debug\n"
-    "  -h, --help               show this help\n";
+  "usage: zpk [options] <command> [args]\n"
+  "\n"
+  "commands:\n"
+  "  add <pkg>...                   install packages\n"
+  "  del <pkg>...                   uninstall packages\n"
+  "  fetch [-o DIR] <pkg>...        download packages without installing\n"
+  "  upgrade [pkg...]               upgrade packages (all if none given)\n"
+  "  fix [pkg...]                   reinstall broken packages (all if none given)\n"
+  "  list [-I] [-u] [-a] [-O]       list installed/upgradable/available/orphaned packages\n"
+  "  info -W <path>                 show which package owns a path\n"
+  "\n"
+  "global options:\n"
+  "  -p, --root DIR                 install to alternate root\n"
+  "  -X, --repository URI           add a repository (repeatable)\n"
+  "      --config FILE              use FILE instead of searching for .zpk.ini\n"
+  "  -s, --simulate[=BOOL]          when enabled, downloads data but does not commit to FS\n"
+  "  -v, --verbose                  raise log level to info; -vv for debug\n"
+  "      --check-certificate[=BOOL] when turned off, disables certificate validation\n"
+  "  -h, --help                     show this help\n";
 
 static int count_verbose_flag(const char *arg) {
   if (arg[0] != '-') {
@@ -411,28 +507,90 @@ static char *opt_value(int argc, char **argv, int *i) {
   return argv[*i];
 }
 
-static ZpkOpKind lookup_command(const char *name) {
-  if (strcmp(name, "add") == 0)
-    return ZPK_OP_ADD;
-  if (strcmp(name, "fetch") == 0)
-    return ZPK_OP_FETCH;
-  if (strcmp(name, "del") == 0)
-    return ZPK_OP_DEL;
-  if (strcmp(name, "upgrade") == 0)
-    return ZPK_OP_UPGRADE;
-  if (strcmp(name, "fix") == 0)
-    return ZPK_OP_FIX;
-  if (strcmp(name, "list") == 0)
-    return ZPK_OP_LIST;
-  if (strcmp(name, "info") == 0)
-    return ZPK_OP_OWNER;
-  LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "unknown command '%s' (see 'zpk --help')",
-                 name);
+// matches an option written either `--opt VALUE` or `--opt=VALUE`; returns NULL
+// if arg names some other option
+static const char *
+match_value_flag(int argc, char **argv, int *i, const char *shortopt, const char *longopt) {
+  const char *arg = argv[*i];
+  const char *names[2] = {shortopt, longopt};
+  for (size_t n = 0; n < 2; n++) {
+    if (names[n] == NULL) {
+      continue;
+    }
+    size_t len = strlen(names[n]);
+    if (strncmp(arg, names[n], len) != 0) {
+      continue;
+    }
+    if (arg[len] == '\0') {
+      return opt_value(argc, argv, i);
+    }
+    if (arg[len] == '=') {
+      return arg + len + 1;
+    }
+  }
+  return NULL;
+}
+
+static bool parse_bool_value(const char *opt, const char *value) {
+  if (strcmp(value, "yes") == 0) {
+    return true;
+  }
+  if (strcmp(value, "no") == 0) {
+    return false;
+  }
+  LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "option '%s': expected 'yes' or 'no', but got '%s'", opt, value);
   PANIC();
 }
 
-void parse_args(int argc, char **argv, ZpkConfiguration *config,
-                ZpkOperation *op) {
+static bool match_bool_flag(const char *arg, const char *shortopt, const char *longopt, bool *out) {
+  const char *names[2] = {shortopt, longopt};
+  for (size_t n = 0; n < 2; n++) {
+    if (names[n] == NULL) {
+      continue;
+    }
+    size_t len = strlen(names[n]);
+    if (strncmp(arg, names[n], len) != 0) {
+      continue;
+    }
+    if (arg[len] == '\0') {
+      *out = true;
+      return true;
+    }
+    if (arg[len] == '=') {
+      *out = parse_bool_value(names[n], arg + len + 1);
+      return true;
+    }
+  }
+  return false;
+}
+
+static ZpkOpKind lookup_command(const char *name) {
+  if (strcmp(name, "add") == 0) {
+    return ZPK_OP_ADD;
+  }
+  if (strcmp(name, "fetch") == 0) {
+    return ZPK_OP_FETCH;
+  }
+  if (strcmp(name, "del") == 0) {
+    return ZPK_OP_DEL;
+  }
+  if (strcmp(name, "upgrade") == 0) {
+    return ZPK_OP_UPGRADE;
+  }
+  if (strcmp(name, "fix") == 0) {
+    return ZPK_OP_FIX;
+  }
+  if (strcmp(name, "list") == 0) {
+    return ZPK_OP_LIST;
+  }
+  if (strcmp(name, "info") == 0) {
+    return ZPK_OP_OWNER;
+  }
+  LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "unknown command '%s' (see 'zpk --help')", name);
+  PANIC();
+}
+
+void parse_args(int argc, char **argv, ZpkConfiguration *config, ZpkOperation *op) {
   const char *cli_sysroot = NULL;
   const char *cli_config = NULL;
   const char *fetch_output = NULL;
@@ -443,7 +601,10 @@ void parse_args(int argc, char **argv, ZpkConfiguration *config,
   bool info_who_owns = false;
   bool have_op = false;
   bool no_more_options = false;
-  bool dry_run = false;
+  bool cli_simulate = false;
+  bool have_simulate = false;
+  bool cli_check_certificate = false;
+  bool have_check_certificate = false;
   int verbosity = 0;
   ZpkOpKind kind = ZPK_OP_ADD; // overwritten when the command is seen
 
@@ -455,6 +616,7 @@ void parse_args(int argc, char **argv, ZpkConfiguration *config,
   for (int i = 1; i < argc; i++) {
     char *arg = argv[i];
     int nverbose = count_verbose_flag(arg);
+    const char *val = NULL;
 
     if (no_more_options || arg[0] != '-' || arg[1] == '\0') {
       if (!have_op) {
@@ -472,39 +634,47 @@ void parse_args(int argc, char **argv, ZpkConfiguration *config,
     } else if (strcmp(arg, "-h") == 0 || strcmp(arg, "--help") == 0) {
       fputs(USAGE, stdout);
       exit(EXIT_SUCCESS);
-    } else if (strcmp(arg, "-p") == 0 || strcmp(arg, "--root") == 0) {
-      cli_sysroot = opt_value(argc, argv, &i);
-    } else if (strcmp(arg, "-X") == 0 || strcmp(arg, "--repository") == 0) {
-      char_ptr repo = strdup(opt_value(argc, argv, &i));
+    } else if ((val = match_value_flag(argc, argv, &i, "-p", "--root")) != NULL) {
+      cli_sysroot = val;
+    } else if ((val = match_value_flag(argc, argv, &i, "-X", "--repository")) != NULL) {
+      char_ptr repo = strdup(val);
       vec_char_ptr_push(&cli_extra_repositories, &repo);
-    } else if (strcmp(arg, "--config") == 0) {
-      cli_config = opt_value(argc, argv, &i);
-    } else if (strcmp(arg, "-s") == 0 || strcmp(arg, "--simulate") == 0) {
-      dry_run = true;
+    } else if ((val = match_value_flag(argc, argv, &i, NULL, "--config")) != NULL) {
+      cli_config = val;
+    } else if (match_bool_flag(arg, "-s", "--simulate", &cli_simulate)) {
+      have_simulate = true;
+    } else if (match_bool_flag(arg, NULL, "--check-certificate", &cli_check_certificate)) {
+      have_check_certificate = true;
     } else if (nverbose > 0 || strcmp(arg, "--verbose") == 0) {
       verbosity += nverbose > 0 ? nverbose : 1;
       g_log_level = verbosity_to_level(verbosity);
-    } else if (have_op && kind == ZPK_OP_FETCH &&
-               (strcmp(arg, "-o") == 0 || strcmp(arg, "--output") == 0)) {
-      fetch_output = opt_value(argc, argv, &i);
-    } else if (have_op && kind == ZPK_OP_LIST &&
-               (strcmp(arg, "-I") == 0 || strcmp(arg, "--installed") == 0)) {
+    } else if (
+      have_op && kind == ZPK_OP_FETCH
+      && (val = match_value_flag(argc, argv, &i, "-o", "--output")) != NULL
+    ) {
+      fetch_output = val;
+    } else if (
+      have_op && kind == ZPK_OP_LIST && (strcmp(arg, "-I") == 0 || strcmp(arg, "--installed") == 0)
+    ) {
       list_installed = true;
-    } else if (have_op && kind == ZPK_OP_LIST &&
-               (strcmp(arg, "-u") == 0 || strcmp(arg, "--upgradable") == 0)) {
+    } else if (
+      have_op && kind == ZPK_OP_LIST && (strcmp(arg, "-u") == 0 || strcmp(arg, "--upgradable") == 0)
+    ) {
       list_upgradable = true;
-    } else if (have_op && kind == ZPK_OP_LIST &&
-               (strcmp(arg, "-a") == 0 || strcmp(arg, "--available") == 0)) {
+    } else if (
+      have_op && kind == ZPK_OP_LIST && (strcmp(arg, "-a") == 0 || strcmp(arg, "--available") == 0)
+    ) {
       list_available = true;
-    } else if (have_op && kind == ZPK_OP_LIST &&
-               (strcmp(arg, "-O") == 0 || strcmp(arg, "--orphaned") == 0)) {
+    } else if (
+      have_op && kind == ZPK_OP_LIST && (strcmp(arg, "-O") == 0 || strcmp(arg, "--orphaned") == 0)
+    ) {
       list_orphaned = true;
-    } else if (have_op && kind == ZPK_OP_OWNER &&
-               (strcmp(arg, "-W") == 0 || strcmp(arg, "--who-owns") == 0)) {
+    } else if (
+      have_op && kind == ZPK_OP_OWNER && (strcmp(arg, "-W") == 0 || strcmp(arg, "--who-owns") == 0)
+    ) {
       info_who_owns = true;
     } else {
-      LOG_ERROR_ARGS(ERR_LEVEL_FATAL,
-                     "unrecognized option '%s' (see 'zpk --help')", arg);
+      LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "unrecognized option '%s' (see 'zpk --help')", arg);
       PANIC();
     }
   }
@@ -516,95 +686,100 @@ void parse_args(int argc, char **argv, ZpkConfiguration *config,
 
   size_t ntargets = vec_char_ptr_len(&targets);
   switch (kind) {
-  case ZPK_OP_ADD:
-  case ZPK_OP_DEL:
-  case ZPK_OP_FETCH:
-    if (ntargets == 0) {
-      LOG_ERROR(ERR_LEVEL_FATAL, "at least one package required");
-      PANIC();
-    }
-    break;
-  case ZPK_OP_OWNER:
-    if (!info_who_owns) {
-      LOG_ERROR(ERR_LEVEL_FATAL, "'info' supports only -W/--who-owns");
-      PANIC();
-    }
-    if (ntargets != 1) {
-      LOG_ERROR(ERR_LEVEL_FATAL, "'info -W' requires exactly one path");
-      PANIC();
-    }
-    break;
-  case ZPK_OP_LIST:
-    if (ntargets != 0) {
-      LOG_ERROR(ERR_LEVEL_FATAL, "'list' takes no arguments");
-      PANIC();
-    }
-    break;
-  default:
-    break;
+    case ZPK_OP_ADD:
+    case ZPK_OP_DEL:
+    case ZPK_OP_FETCH:
+      if (ntargets == 0) {
+        LOG_ERROR(ERR_LEVEL_FATAL, "at least one package required");
+        PANIC();
+      }
+      break;
+    case ZPK_OP_OWNER:
+      if (!info_who_owns) {
+        LOG_ERROR(ERR_LEVEL_FATAL, "'info' supports only -W/--who-owns");
+        PANIC();
+      }
+      if (ntargets != 1) {
+        LOG_ERROR(ERR_LEVEL_FATAL, "'info -W' requires exactly one path");
+        PANIC();
+      }
+      break;
+    case ZPK_OP_LIST:
+      if (ntargets != 0) {
+        LOG_ERROR(ERR_LEVEL_FATAL, "'list' takes no arguments");
+        PANIC();
+      }
+      break;
+    default:
+      break;
   }
 
   // args are fully validated; only now touch the filesystem.
   // resolve_configuration copies the -X strings, so we still own these
-  resolve_configuration(config, cli_config, cli_sysroot,
-                        &cli_extra_repositories);
+  resolve_configuration(
+    config,
+    cli_config,
+    cli_sysroot,
+    have_check_certificate ? &cli_check_certificate : NULL,
+    have_simulate ? &cli_simulate : NULL,
+    &cli_extra_repositories
+  );
   vec_char_ptr_delete_and_freeowned(&cli_extra_repositories);
 
   op->op = kind;
-  op->dry_run = dry_run;
   switch (kind) {
-  case ZPK_OP_ADD:
-    op->add.targets = targets;
-    break;
-  case ZPK_OP_DEL:
-    op->del.targets = targets;
-    break;
-  case ZPK_OP_UPGRADE:
-    op->upgrade.targets = targets;
-    break;
-  case ZPK_OP_FIX:
-    op->fix.targets = targets;
-    break;
-  case ZPK_OP_FETCH:
-    op->fetch.targets = targets;
-    op->fetch.output_dir = strdup(fetch_output != NULL ? fetch_output : ".");
-    break;
-  case ZPK_OP_OWNER:
-    op->owner.path = *vec_char_ptr_at(&targets, 0);
-    vec_char_ptr_delete(&targets);
-    break;
-  case ZPK_OP_LIST:
-    op->list.installed = list_installed;
-    op->list.upgradable = list_upgradable;
-    op->list.available = list_available;
-    op->list.orphaned = list_orphaned;
-    vec_char_ptr_delete(&targets);
-    break;
+    case ZPK_OP_ADD:
+      op->add.targets = targets;
+      break;
+    case ZPK_OP_DEL:
+      op->del.targets = targets;
+      break;
+    case ZPK_OP_UPGRADE:
+      op->upgrade.targets = targets;
+      break;
+    case ZPK_OP_FIX:
+      op->fix.targets = targets;
+      break;
+    case ZPK_OP_FETCH:
+      op->fetch.targets = targets;
+      op->fetch.output_dir = strdup(fetch_output != NULL ? fetch_output : ".");
+      break;
+    case ZPK_OP_OWNER:
+      op->owner.path = *vec_char_ptr_at(&targets, 0);
+      vec_char_ptr_delete(&targets);
+      break;
+    case ZPK_OP_LIST:
+      op->list.installed = list_installed;
+      op->list.upgradable = list_upgradable;
+      op->list.available = list_available;
+      op->list.orphaned = list_orphaned;
+      vec_char_ptr_delete(&targets);
+      break;
   }
 }
 
-void delete_ZpkOperation(ZpkOperation *op) {
+void delete_zpkoperation(ZpkOperation *op) {
   switch (op->op) {
-  case ZPK_OP_ADD:
-    vec_char_ptr_delete_and_freeowned(&op->add.targets);
-    break;
-  case ZPK_OP_DEL:
-    vec_char_ptr_delete_and_freeowned(&op->del.targets);
-    break;
-  case ZPK_OP_UPGRADE:
-    vec_char_ptr_delete_and_freeowned(&op->upgrade.targets);
-    break;
-  case ZPK_OP_FIX:
-    vec_char_ptr_delete_and_freeowned(&op->fix.targets);
-    break;
-  case ZPK_OP_FETCH:
-    vec_char_ptr_delete_and_freeowned(&op->fetch.targets);
-    free(op->fetch.output_dir);
-    break;
-  case ZPK_OP_OWNER:
-    free(op->owner.path);
-    break;
-  default:
-    break;
+    case ZPK_OP_ADD:
+      vec_char_ptr_delete_and_freeowned(&op->add.targets);
+      break;
+    case ZPK_OP_DEL:
+      vec_char_ptr_delete_and_freeowned(&op->del.targets);
+      break;
+    case ZPK_OP_UPGRADE:
+      vec_char_ptr_delete_and_freeowned(&op->upgrade.targets);
+      break;
+    case ZPK_OP_FIX:
+      vec_char_ptr_delete_and_freeowned(&op->fix.targets);
+      break;
+    case ZPK_OP_FETCH:
+      vec_char_ptr_delete_and_freeowned(&op->fetch.targets);
+      free(op->fetch.output_dir);
+      break;
+    case ZPK_OP_OWNER:
+      free(op->owner.path);
+      break;
+    default:
+      break;
   }
 }

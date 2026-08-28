@@ -140,7 +140,7 @@ void tcp_close_portable(TcpSocket *socket) {
   free(socket);
 }
 
-TcpError tcp_recv_portable(TcpSocket *socket, size_t *recvd, char *buf,
+TcpError tcp_recv_portable(TcpSocket *socket, size_t *recvd, unsigned char *buf,
                            size_t buflen) {
   if (socket == NULL || recvd == NULL || (buf == NULL && buflen != 0)) {
     return TCP_ERR_INVALID_ARGUMENT;
@@ -152,8 +152,8 @@ TcpError tcp_recv_portable(TcpSocket *socket, size_t *recvd, char *buf,
   }
 
   int length = buflen > (size_t)INT_MAX ? INT_MAX : (int)buflen;
-  for (;;) {
-    int result = recv(socket->handle, buf, length, 0);
+  while(true) {
+    int result = recv(socket->handle, (char*)buf, length, 0);
     if (result > 0) {
       *recvd = (size_t)result;
       return TCP_ERR_OK;
@@ -170,7 +170,7 @@ TcpError tcp_recv_portable(TcpSocket *socket, size_t *recvd, char *buf,
   }
 }
 
-TcpError tcp_send_portable(TcpSocket *socket, size_t *sent, const char *buf,
+TcpError tcp_send_portable(TcpSocket *socket, size_t *sent, const unsigned  char *buf,
                            size_t buflen) {
   if (socket == NULL || sent == NULL || (buf == NULL && buflen != 0)) {
     return TCP_ERR_INVALID_ARGUMENT;
@@ -180,7 +180,7 @@ TcpError tcp_send_portable(TcpSocket *socket, size_t *sent, const char *buf,
   while (*sent < buflen) {
     size_t remaining = buflen - *sent;
     int length = remaining > (size_t)INT_MAX ? INT_MAX : (int)remaining;
-    int result = send(socket->handle, buf + *sent, length, 0);
+    int result = send(socket->handle, (const char*)buf + *sent, length, 0);
 
     if (result > 0) {
       *sent += (size_t)result;
