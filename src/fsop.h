@@ -11,10 +11,10 @@ typedef enum {
   FSOP_REMOVEFILE,
   FSOP_MKDIR,
   FSOP_RMDIR
-} fsop_kind_t;
+} FsopKind;
 
 typedef struct {
-  fsop_kind_t kind;
+  FsopKind kind;
   // not owned by delete_fsop
   const char *op;
   // needs to be owned. lifetime can be uncertain.
@@ -44,8 +44,8 @@ typedef struct {
       char *path;
     } rmdir;
   };
-} fsop_t;
+} FsOp;
 
-void delete_fsop(fsop_t *o);
+void delete_fsop(FsOp *o);
 
 #endif // fsop_h_INCLUDED

@@ -12,18 +12,18 @@ typedef struct {
   llrb_char_ptr_packagedata packages;
   llrb_path_indexdata index;
   llrb_path_filestatus statuses;
-} fileindex_t;
+} FileIndex;
 
 // file index manipulation ops
-ErrVal fileindex_build(fileindex_t *index, const char* sysroot, char *pkgs_path);
-void fileindex_delete(fileindex_t *index);
+ErrVal fileindex_build(FileIndex *index, const char* sysroot, char *pkgs_path);
+void fileindex_delete(FileIndex *index);
 
-bool fileindex_contains_package(fileindex_t *index, char *package_basename,
+bool fileindex_contains_package(FileIndex *index, char *package_basename,
                                 bool *changed_during_transaction);
 
-FileStatus *fileindex_status_or_default(fileindex_t *index, const char* fullpath, bool* created);
+FileStatus *fileindex_status_or_default(FileIndex *index, const char* fullpath, bool* created);
 
-FileStatus *fileindex_ensure_actual(fileindex_t *index, const char *fullpath, const char *op, const char *pkg);
+FileStatus *fileindex_ensure_actual(FileIndex *index, const char *fullpath, const char *op, const char *pkg);
 
   
 
@@ -38,11 +38,11 @@ void fileclaims_collect(mz_zip_archive *zip,
 void fileclaims_delete(llrb_char_ptr_fileclaim *claims);
 
 // claim-tree file-index interactions
-void merge_claims_into_index(fileindex_t *index, const char *package,
+void merge_claims_into_index(FileIndex *index, const char *package,
                                llrb_char_ptr_fileclaim *claims,
                                bool simulate_installed);
 
-void remove_claims_from_index(fileindex_t *index, char *package_basename,
+void remove_claims_from_index(FileIndex *index, char *package_basename,
                               llrb_char_ptr_fileclaim *claims,
                               bool simulate_uninstall);
 

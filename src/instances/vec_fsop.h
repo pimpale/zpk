@@ -3,10 +3,12 @@
 
 #include "fsop.h"
 
-#define VEC_DTYPE fsop_t
+#define VEC_NAME fsop
+#define VEC_DTYPE FsOp
 #include <vec/vec.h>
 #undef VEC_DTYPE
+#undef VEC_NAME
 
-void vec_fsop_t_delete_and_freeowned(vec_fsop_t *vec);
+void vec_fsop_delete_and_freeowned(vec_fsop *vec);
 
 #endif // vec_fsop_h_INCLUDED

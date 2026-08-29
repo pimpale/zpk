@@ -1,7 +1,7 @@
 #include "fsop.h"
 #include <stdlib.h>
 
-void delete_fsop(fsop_t *o) {
+void delete_fsop(FsOp *o) {
   free(o->pkg);
   switch (o->kind) {
   case FSOP_RENAME:

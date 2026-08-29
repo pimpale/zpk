@@ -1,8 +1,9 @@
 #ifndef transport_h_INCLUDED
 #define transport_h_INCLUDED
 
-#include "tlsconfig.h"
 #include "tcpcompatlayer.h"
+#include "tlsconfig.h"
+#include <bearssl/inc/bearssl.h>
 
 typedef enum {
   TRANSPORT_ERR_OK = 0,
@@ -31,39 +32,29 @@ typedef enum {
   TRANSPORT_ERR_UNKNOWN,
 } TransportError;
 
-
 typedef struct tls_data TlsData;
 
 typedef struct {
-    bool use_tls;
-    // if false
-    TcpSocket *socket;
-    // if true
-    TlsData* tls;
-} Transport;
+  bool use_tls;
 
+  union {
+    TcpSocket *tcp;
+    TlsData *tls;
+  };
+} Transport ;
+// takes ownership of the socket if no error
+TransportError transport_from_tcp(Transport *transport, TcpSocket *socket);
 
-TransportError transport_connect(
-    Transport* transport,
-    const char* host,
-    const char* port,
-    bool use_tls,
-    TlsConfig *tlsconfig
-);
+// take ownership of the inner transport if no error
+TransportError
+transport_wrap_tls(Transport *transport, Transport *inner, const char *host, TlsConfig *tlsconfig);
 
-TransportError transport_send(
-    Transport* transport,
-    const char* data,
-    size_t length
-);
+TransportError
+transport_send(Transport *transport, const unsigned char *buf, size_t buflen);
 
-TransportError transport_recv(
-    Transport* transport,
-    char* buffer,
-    size_t length,
-    size_t* received
-);
+TransportError
+transport_recv(Transport *transport, unsigned char *buf, size_t buflen, size_t *received);
 
-void transport_close(Transport* transport);
+void transport_close(Transport *transport);
 
 #endif // transport_h_INCLUDED

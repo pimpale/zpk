@@ -12,7 +12,7 @@
 #include "instances/llrb_path_indexdata.h"
 #include "instances/llrbset_char_ptr.h"
 #include "instances/vec_char_ptr.h"
-#include "instances/vec_fsop_t.h"
+#include "instances/vec_fsop.h"
 #include "instances/vec_mz_zip_archive_ptr.h"
 #include "oscompatlayer.h"
 #include "pathutils.h"
@@ -54,14 +54,14 @@ static int do_add(ZpkConfiguration *conf, vec_char_ptr *packages) {
   }
 
   // build index
-  fileindex_t index;
+  FileIndex index;
   fileindex_build(&index, conf->sysroot, conf->installed_pkgs_path);
   defer fileindex_delete(&index);
 
   // contains the fsops of the actual write operation
-  vec_fsop_t fsops;
-  vec_fsop_t_init(&fsops);
-  defer vec_fsop_t_delete_and_freeowned(&fsops);
+  vec_fsop fsops;
+  vec_fsop_init(&fsops);
+  defer vec_fsop_delete_and_freeowned(&fsops);
 
   vec_mz_zip_archive_ptr zips;
   vec_mz_zip_archive_ptr_init(&zips);
@@ -126,14 +126,14 @@ static int do_del(ZpkConfiguration *conf, vec_char_ptr *packages) {
   }
 
   // build index
-  fileindex_t index;
+  FileIndex index;
   fileindex_build(&index, conf->sysroot, conf->installed_pkgs_path);
   defer fileindex_delete(&index);
 
   // contains the fsops of the actual write operation
-  vec_fsop_t fsops;
-  vec_fsop_t_init(&fsops);
-  defer vec_fsop_t_delete_and_freeowned(&fsops);
+  vec_fsop fsops;
+  vec_fsop_init(&fsops);
+  defer vec_fsop_delete_and_freeowned(&fsops);
 
   vec_mz_zip_archive_ptr zips;
   vec_mz_zip_archive_ptr_init(&zips);
@@ -192,14 +192,14 @@ static int do_fix(ZpkConfiguration *conf, vec_char_ptr *packages) {
   }
 
   // build index
-  fileindex_t index;
+  FileIndex index;
   fileindex_build(&index, conf->sysroot, conf->installed_pkgs_path);
   defer fileindex_delete(&index);
 
   // create the fsops vec and the zips vec
-  vec_fsop_t fsops;
-  vec_fsop_t_init(&fsops);
-  defer vec_fsop_t_delete_and_freeowned(&fsops);
+  vec_fsop fsops;
+  vec_fsop_init(&fsops);
+  defer vec_fsop_delete_and_freeowned(&fsops);
 
   vec_mz_zip_archive_ptr zips;
   vec_mz_zip_archive_ptr_init(&zips);
@@ -333,7 +333,7 @@ static int do_list(
 // which package owns each path
 static int do_owner(ZpkConfiguration *conf, char *path) {
   // build index
-  fileindex_t index;
+  FileIndex index;
   fileindex_build(&index, conf->sysroot, conf->installed_pkgs_path);
   defer fileindex_delete(&index);
 

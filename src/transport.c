@@ -5,27 +5,26 @@
 
 #include <assert.h>
 #include <stdlib.h>
-
-#include <bearssl/inc/bearssl.h>
+#include <string.h>
 
 struct tls_data {
+  Transport lower;
+
   br_ssl_client_context client;
   br_x509_minimal_context x509;
   br_sslio_context io;
-
   unsigned char iobuf[BR_SSL_BUFSIZE_BIDI];
 
-  TcpSocket *socket;
-  TcpError last_tcp_error;
-  bool tcp_eof;
+  TransportError last_lower_error;
+  bool lower_eof;
 };
 
-static TransportError convert_tcp_error(TcpError e) {
-  switch (e) {
+static TransportError convert_tcp_error(TcpError error) {
+  switch (error) {
     case TCP_ERR_OK:
       return TRANSPORT_ERR_OK;
     case TCP_ERR_INVALID_ARGUMENT:
-      return TRANSPORT_ERR_TLS_PROTOCOL;
+      return TRANSPORT_ERR_INVALID_ARGUMENT;
     case TCP_ERR_OUT_OF_MEMORY:
       return TRANSPORT_ERR_OUT_OF_MEMORY;
     case TCP_ERR_HOST_NOT_FOUND:
@@ -37,7 +36,7 @@ static TransportError convert_tcp_error(TcpError e) {
     case TCP_ERR_CONNECTION_REFUSED:
       return TRANSPORT_ERR_CONNECTION_REFUSED;
     case TCP_ERR_CONNECTION_RESET:
-      return TRANSPORT_ERR_CONNECTION_REFUSED;
+      return TRANSPORT_ERR_CONNECTION_RESET;
     case TCP_ERR_CONNECTION_CLOSED:
       return TRANSPORT_ERR_CONNECTION_CLOSED;
     case TCP_ERR_HOST_UNREACHABLE:
@@ -60,83 +59,54 @@ static TransportError convert_tcp_error(TcpError e) {
 static TransportError convert_tls_failure(const TlsData *tls) {
   assert(tls != NULL);
 
-  /*
-   * The br_sslio callbacks collapse socket errors into BR_ERR_IO,
-   * so preserve the more specific TCP error.
-   */
-  if (tls->last_tcp_error != TCP_ERR_OK) {
-    return convert_tcp_error(tls->last_tcp_error);
+  /* br_sslio collapses lower-layer failures into BR_ERR_IO. */
+  if (tls->last_lower_error != TRANSPORT_ERR_OK) {
+    return tls->last_lower_error;
   }
 
-  /*
-   * EOF while BearSSL was still waiting for a TLS record means the
-   * peer closed TCP without completing TLS shutdown.
-   */
-  if (tls->tcp_eof) {
+  /* EOF before a TLS close_notify is a truncated TLS stream. */
+  if (tls->lower_eof) {
     return TRANSPORT_ERR_TLS_TRUNCATED;
   }
 
   int error = br_ssl_engine_last_error(&tls->client.eng);
-
   switch (error) {
     case BR_ERR_OK:
-      /*
-       * The engine can be closed without an error after receiving
-       * close_notify. Callers should interpret this as clean EOF.
-       */
+      /* A closed engine with no error represents a clean close_notify. */
       return TRANSPORT_ERR_OK;
-
     case BR_ERR_BAD_PARAM:
       return TRANSPORT_ERR_INVALID_ARGUMENT;
-
     case BR_ERR_IO:
-      /*
-       * Normally a callback will have recorded the real cause above.
-       * This is the fallback for an otherwise unexplained I/O failure.
-       */
       return TRANSPORT_ERR_IO;
-
     case BR_ERR_X509_BAD_SERVER_NAME:
       return TRANSPORT_ERR_TLS_HOSTNAME_MISMATCH;
   }
 
-  /*
-   * BearSSL reserves 32..63 for X.509 errors. BR_ERR_X509_OK is 32,
-   * so actual certificate failures begin above it.
-   */
+  /* BearSSL reserves 32 through 63 for X.509 status codes. */
   if (error > BR_ERR_X509_OK && error < 64) {
     return TRANSPORT_ERR_TLS_CERTIFICATE;
   }
 
-  /*
-   * Fatal alert codes consist of a base plus an 8-bit TLS alert value:
-   *   256..511: received fatal alert
-   *   512..767: sent fatal alert
-   */
+  /* Fatal alert values are a direction-specific base plus an 8-bit code. */
   if (error >= BR_ERR_RECV_FATAL_ALERT && error < BR_ERR_SEND_FATAL_ALERT + 256) {
     return TRANSPORT_ERR_TLS_ALERT;
   }
 
-  /*
-   * Bad records, unsupported versions, handshake failures, bad MACs,
-   * unsupported algorithms, and similar engine failures.
-   */
   return TRANSPORT_ERR_TLS_PROTOCOL;
 }
 
 static int tls_low_read(void *context, unsigned char *buf, size_t length) {
   TlsData *tls = context;
-  size_t received;
+  size_t received = 0;
 
-  TcpError err = tcp_recv_portable(tls->socket, &received, buf, length);
-
-  if (err != TCP_ERR_OK) {
-    tls->last_tcp_error = err;
+  TransportError error = transport_recv(&tls->lower, buf, length, &received);
+  if (error != TRANSPORT_ERR_OK) {
+    tls->last_lower_error = error;
     return -1;
   }
 
   if (received == 0) {
-    tls->tcp_eof = true;
+    tls->lower_eof = true;
     return -1;
   }
 
@@ -145,25 +115,19 @@ static int tls_low_read(void *context, unsigned char *buf, size_t length) {
 
 static int tls_low_write(void *context, const unsigned char *buf, size_t length) {
   TlsData *tls = context;
-  size_t sent;
 
-  TcpError err = tcp_send_portable(tls->socket, &sent, buf, length);
-
-  if (err != TCP_ERR_OK) {
-    tls->last_tcp_error = err;
+  TransportError error = transport_send(&tls->lower, buf, length);
+  if (error != TRANSPORT_ERR_OK) {
+    tls->last_lower_error = error;
     return -1;
   }
 
-  return (int)sent;
+  return (int)length;
 }
 
-static TransportError
-tls_connect(TlsData *tls, const char *hostname, const char *port, TlsConfig *tlsconfig) {
-  TcpError tce = tcp_connect_portable(&tls->socket, hostname, port);
-  if (tce != TCP_ERR_OK) {
-    return convert_tcp_error(tce);
-  }
-  tls->last_tcp_error = TCP_ERR_OK;
+static TransportError tls_initialize(TlsData *tls, const char *host, TlsConfig *tlsconfig) {
+  tls->last_lower_error = TRANSPORT_ERR_OK;
+  tls->lower_eof = false;
   memset(tls->iobuf, 0, sizeof(tls->iobuf));
 
   br_ssl_client_init_full(
@@ -172,48 +136,121 @@ tls_connect(TlsData *tls, const char *hostname, const char *port, TlsConfig *tls
     tlsconfig->trust_anchors,
     tlsconfig->trust_anchor_count
   );
-
   br_ssl_engine_set_buffer(&tls->client.eng, tls->iobuf, sizeof(tls->iobuf), 1);
-
   br_ssl_engine_set_versions(&tls->client.eng, BR_TLS12, BR_TLS12);
-
   br_sslio_init(&tls->io, &tls->client.eng, tls_low_read, tls, tls_low_write, tls);
 
-  if (!br_ssl_client_reset(&tls->client, hostname, 0)) {
+  if (!br_ssl_client_reset(&tls->client, host, 0)) {
     return convert_tls_failure(tls);
   }
-
   if (br_sslio_flush(&tls->io) < 0) {
     return convert_tls_failure(tls);
   }
-
   return TRANSPORT_ERR_OK;
 }
 
-TransportError transport_connect(
-  Transport *transport,
-  const char *hostname,
-  const char *port,
-  bool use_tls,
-  TlsConfig *tlsconfig
-) {
-  if (use_tls) {
-    transport->tls = malloc(sizeof(TlsData));
-    if (transport->tls == NULL) {
-      return TRANSPORT_ERR_OUT_OF_MEMORY;
+TransportError transport_from_tcp(Transport *transport, TcpSocket *socket) {
+  transport->use_tls = false;
+  transport->tcp = socket;
+  return TRANSPORT_ERR_OK;
+}
+
+TransportError
+transport_wrap_tls(Transport *transport, Transport *inner, const char *host, TlsConfig *tlsconfig) {
+  TlsData *tls = malloc(sizeof(*tls));
+  if (tls == NULL) {
+    return TRANSPORT_ERR_OUT_OF_MEMORY;
+  }
+
+  tls->lower = *inner;
+  TransportError error = tls_initialize(tls, host, tlsconfig);
+  if (error != TRANSPORT_ERR_OK) {
+    free(tls);
+    return error;
+  }
+
+  if (transport != inner) {
+    inner->use_tls = false;
+    inner->tcp = NULL;
+  }
+  transport->use_tls = true;
+  transport->tls = tls;
+  return TRANSPORT_ERR_OK;
+}
+
+TransportError transport_send(Transport *transport, const unsigned char *buf, size_t buflen) {
+  if (buflen == 0) {
+    return TRANSPORT_ERR_OK;
+  }
+
+  if (transport->use_tls) {
+    size_t sent = 0;
+    while (sent < buflen) {
+      int result = br_sslio_write(&transport->tls->io, buf + sent, buflen - sent);
+      if (result < 0) {
+        return convert_tls_failure(transport->tls);
+      }
+      if (result == 0) {
+        return TRANSPORT_ERR_CONNECTION_CLOSED;
+      }
+      sent += (size_t)result;
     }
-    TransportError e = tls_connect(transport->tls, hostname, port, tlsconfig);
-    if (e != TRANSPORT_ERR_OK) {
-      free(transport->tls);
+
+    if (br_sslio_flush(&transport->tls->io) < 0) {
+      return convert_tls_failure(transport->tls);
     }
-    return e;
+    return TRANSPORT_ERR_OK;
   } else {
-    return convert_tcp_error(tcp_connect_portable(&transport->socket, hostname, port));
+    size_t sent = 0;
+    while (sent < buflen) {
+      size_t sent_now = 0;
+      TransportError error =
+        convert_tcp_error(tcp_send_portable(transport->tcp, &sent_now, buf + sent, buflen - sent));
+      if (error != TRANSPORT_ERR_OK) {
+        return error;
+      }
+      if (sent_now == 0) {
+        return TRANSPORT_ERR_CONNECTION_CLOSED;
+      }
+      sent += sent_now;
+    }
+    return TRANSPORT_ERR_OK;
   }
 }
 
-TransportError transport_send(Transport *transport, const char *data, size_t length);
+TransportError
+transport_recv(Transport *transport, unsigned char *buf, size_t buflen, size_t *received) {
+  *received = 0;
+  if (buflen == 0) {
+    return TRANSPORT_ERR_OK;
+  }
+  if (transport->use_tls) {
+    int result = br_sslio_read(&transport->tls->io, buf, buflen);
+    if (result < 0) {
+      return convert_tls_failure(transport->tls);
+    }
+    *received = (size_t)result;
+    return TRANSPORT_ERR_OK;
+  } else {
+    return convert_tcp_error(tcp_recv_portable(transport->tcp, received, buf, buflen));
+  }
+}
 
-TransportError transport_recv(Transport *transport, char *buffer, size_t length, size_t *received);
+void transport_close(Transport *transport) {
+  if (transport == NULL) {
+    return;
+  }
 
-void transport_close(Transport *transport);
+  if (transport->use_tls) {
+    TlsData *tls = transport->tls;
+    if (tls != NULL) {
+      transport_close(&tls->lower);
+      free(tls);
+    }
+  } else if (transport->tcp != NULL) {
+    tcp_close_portable(transport->tcp);
+  }
+
+  transport->use_tls = false;
+  transport->tcp = NULL;
+}

@@ -14,16 +14,16 @@
 #include "instances/llrb_char_ptr_fileclaim.h"
 #include "instances/llrb_path_indexdata.h"
 #include "instances/vec_char_ptr.h"
-#include "instances/vec_fsop_t.h"
+#include "instances/vec_fsop.h"
 #include "instances/vec_mz_zip_archive_ptr.h"
 #include "miniz/miniz.h"
 #include "oscompatlayer.h"
 #include "pathutils.h"
 
 // logging is mandatory here
-void execute_fsops(vec_fsop_t *fsops, const bool dry_run) {
+void execute_fsops(vec_fsop *fsops, const bool dry_run) {
   for (size_t i = 0; i < fsops->len; i++) {
-    fsop_t *o = vec_fsop_t_at(fsops, i);
+    FsOp *o = vec_fsop_at(fsops, i);
     switch (o->kind) {
 
       case FSOP_RENAME:
@@ -169,7 +169,7 @@ static bool is_match(FileStatus fs, FileClaim claim) {
 
 // compute the status of the actual file wrt the package claims
 static ErrVal compute_match_status(
-  fileindex_t *index,
+  FileIndex *index,
   // for logging only
   const char *op,
   // package
@@ -235,14 +235,14 @@ void fsops_emit_mkdir(
   // takes ownership of path
   char *path,
   // appends to this
-  vec_fsop_t *fsops,
+  vec_fsop *fsops,
   // simulates the behavior in fileindex
-  fileindex_t *index
+  FileIndex *index
 ) {
-  fsop_t o = {.op = op, .pkg = strdup(pkg)};
+  FsOp o = {.op = op, .pkg = strdup(pkg)};
   o.kind = FSOP_MKDIR;
   o.mkdir.path = path;
-  vec_fsop_t_push(fsops, &o);
+  vec_fsop_push(fsops, &o);
 
   FileStatus *status = fileindex_status_or_default(index, path, NULL);
   status->changed_during_transaction = true;
@@ -258,21 +258,21 @@ void fsops_emit_install(
   FileClaim claim,
   mz_zip_archive *zip,
   // appends to this
-  vec_fsop_t *fsops,
+  vec_fsop *fsops,
   // simulates the behavior in fileindex
-  fileindex_t *index
+  FileIndex *index
 ) {
 
   if (claim.is_directory) {
     fsops_emit_mkdir(op, pkg, path, fsops, index);
   } else {
-    fsop_t o = {.op = op, .pkg = strdup(pkg)};
+    FsOp o = {.op = op, .pkg = strdup(pkg)};
     o.kind = FSOP_CREATEFILE;
     o.createfile.path = path;
     o.createfile.file_index = claim.file_index;
     o.createfile.zip = zip;
 
-    vec_fsop_t_push(fsops, &o);
+    vec_fsop_push(fsops, &o);
 
     // update filestatus
     FileStatus *status = fileindex_status_or_default(index, path, NULL);
@@ -288,9 +288,9 @@ ErrVal fsops_emit_mkdir_p( // logging only
     // takes ownership
     char *path,
     // file index op
-    vec_fsop_t *fsops,
+    vec_fsop *fsops,
     // simulates the behavior in fileindex
-    fileindex_t *index) {
+    FileIndex *index) {
   char *p = path;
   while (true) {
     bool nullbyte = *p == '\0';
@@ -320,14 +320,14 @@ void fsops_emit_rm(
   const char *pkg,
   // takes ownership
   char *path,
-  vec_fsop_t *fsops,
+  vec_fsop *fsops,
   // simulates the behavior in fileindex
-  fileindex_t *index
+  FileIndex *index
 ) {
-  fsop_t o = {.op = op, .pkg = strdup(pkg)};
+  FsOp o = {.op = op, .pkg = strdup(pkg)};
   o.kind = FSOP_REMOVEFILE;
   o.removefile.path = path;
-  vec_fsop_t_push(fsops, &o);
+  vec_fsop_push(fsops, &o);
 
   FileStatus *status = fileindex_status_or_default(index, path, NULL);
   status->changed_during_transaction = true;
@@ -338,14 +338,14 @@ void fsops_emit_rmdir(
   const char *op,
   const char *pkg,
   char *path,
-  vec_fsop_t *fsops,
+  vec_fsop *fsops,
   // simulates the behavior in fileindex
-  fileindex_t *index
+  FileIndex *index
 ) {
-  fsop_t o = {.op = op, .pkg = strdup(pkg)};
+  FsOp o = {.op = op, .pkg = strdup(pkg)};
   o.kind = FSOP_RMDIR;
   o.rmdir.path = path;
-  vec_fsop_t_push(fsops, &o);
+  vec_fsop_push(fsops, &o);
 
   FileStatus *status = fileindex_status_or_default(index, path, NULL);
   status->changed_during_transaction = true;
@@ -357,12 +357,11 @@ void fsops_emit_mv(
   const char *pkg,
   char *from,
   char *to,
-  vec_fsop_t *fsops,
-  fileindex_t *index
+  vec_fsop *fsops,
+  FileIndex *index
 ) {
-  fsop_t o =
-    {.op = op, .pkg = strdup(pkg), .kind = FSOP_RENAME, .rename = {.from = from, .to = to}};
-  vec_fsop_t_push(fsops, &o);
+  FsOp o = {.op = op, .pkg = strdup(pkg), .kind = FSOP_RENAME, .rename = {.from = from, .to = to}};
+  vec_fsop_push(fsops, &o);
 
   // these may alias
   FileStatus *fromstatus = fileindex_status_or_default(index, from, NULL);
@@ -380,11 +379,11 @@ void fsops_emit_cp(
   const char *pkg,
   char *from,
   char *to,
-  vec_fsop_t *fsops,
-  fileindex_t *index
+  vec_fsop *fsops,
+  FileIndex *index
 ) {
-  fsop_t o = {.op = op, .pkg = strdup(pkg), .kind = FSOP_COPY, .copy = {.from = from, .to = to}};
-  vec_fsop_t_push(fsops, &o);
+  FsOp o = {.op = op, .pkg = strdup(pkg), .kind = FSOP_COPY, .copy = {.from = from, .to = to}};
+  vec_fsop_push(fsops, &o);
 
   // these may alias
   FileStatus *fromstatus = fileindex_status_or_default(index, from, NULL);
@@ -404,9 +403,9 @@ ErrVal fsops_emit_rm_rf(
   const char *pkg,
   // takes ownership
   char *path,
-  vec_fsop_t *fsops,
+  vec_fsop *fsops,
   // simulates the behavior in fileindex
-  fileindex_t *index
+  FileIndex *index
 
 ) {
   switch (path_type_portable(path)) {
@@ -520,12 +519,12 @@ ErrVal fsops_emit_install_package(
   // the name of the package
   const char *pkg,
   // appends to this if the operation would succeed
-  vec_fsop_t *fsops,
+  vec_fsop *fsops,
   // fsops refer to indexes in the zips. appends to this if the operation
   // would succeed
   vec_mz_zip_archive_ptr *zips,
   // file index (for file conflict identification)
-  fileindex_t *index,
+  FileIndex *index,
 
   // zip file to install
   char *package_path,
@@ -572,9 +571,9 @@ ErrVal fsops_emit_install_package(
   fileclaims_collect(pZip, op, package, sysroot, &claims);
   defer fileclaims_delete(&claims);
 
-  vec_fsop_t pkfsops;
-  vec_fsop_t_init(&pkfsops);
-  defer vec_fsop_t_delete_and_freeowned(&pkfsops);
+  vec_fsop pkfsops;
+  vec_fsop_init(&pkfsops);
+  defer vec_fsop_delete_and_freeowned(&pkfsops);
 
   // set this to true if we reach a package-fatal error that means it shouldn't
   // be installed we want to surface all errors though rather than just the
@@ -681,8 +680,8 @@ ErrVal fsops_emit_install_package(
   }
 
   // if all good transfer ownership of newly created pkgs and zip
-  vec_fsop_t_append(fsops, &pkfsops);
-  vec_fsop_t_clear(&pkfsops);
+  vec_fsop_append(fsops, &pkfsops);
+  vec_fsop_clear(&pkfsops);
   vec_mz_zip_archive_ptr_push(zips, &pZip);
 
   // add to index
@@ -696,9 +695,9 @@ ErrVal fsops_emit_uninstall_package(
   // the name of the package
   const char *package,
   // appends to this if the operation would succeed
-  vec_fsop_t *fsops,
+  vec_fsop *fsops,
   // file index (for file conflict identification)
-  fileindex_t *index,
+  FileIndex *index,
   // zip file to uninstall
   char *package_path,
   // where to uninstall
@@ -740,9 +739,9 @@ ErrVal fsops_emit_uninstall_package(
   mz_zip_reader_end(zip);
   free(zip);
 
-  vec_fsop_t pkfsops;
-  vec_fsop_t_init(&pkfsops);
-  defer vec_fsop_t_delete_and_freeowned(&pkfsops);
+  vec_fsop pkfsops;
+  vec_fsop_init(&pkfsops);
+  defer vec_fsop_delete_and_freeowned(&pkfsops);
 
   // remember: we go in reverse direction than installation,
   // because we must remove children before parents
@@ -809,7 +808,7 @@ ErrVal fsops_emit_uninstall_package(
   remove_claims_from_index(index, package, &claims, true);
 
   // if all good transfer ownership of newly created pkgs
-  vec_fsop_t_append(fsops, &pkfsops);
-  vec_fsop_t_clear(&pkfsops);
+  vec_fsop_append(fsops, &pkfsops);
+  vec_fsop_clear(&pkfsops);
   return ERR_OK;
 }

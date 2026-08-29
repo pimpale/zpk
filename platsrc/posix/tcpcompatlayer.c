@@ -110,10 +110,6 @@ void tcp_close_portable(TcpSocket *socket) {
 }
 
 TcpError tcp_recv_portable(TcpSocket *socket, size_t *recvd, unsigned char *buf, size_t buflen) {
-  if (socket == NULL || recvd == NULL || (buf == NULL && buflen != 0)) {
-    return TCP_ERR_INVALID_ARGUMENT;
-  }
-
   *recvd = 0;
   if (buflen == 0) {
     return TCP_ERR_OK;
@@ -135,14 +131,19 @@ TcpError tcp_recv_portable(TcpSocket *socket, size_t *recvd, unsigned char *buf,
   }
 }
 
-TcpError tcp_send_portable(TcpSocket *socket, size_t *sent, const unsigned char *buf, size_t buflen) {
-  if (socket == NULL || sent == NULL || (buf == NULL && buflen != 0)) {
-    return TCP_ERR_INVALID_ARGUMENT;
-  }
+TcpError
+tcp_send_portable(TcpSocket *socket, size_t *sent, const unsigned char *buf, size_t buflen) {
   *sent = 0;
 
+  int flags = 0;
+#ifdef MSG_NOSIGNAL
+  flags = MSG_NOSIGNAL;
+#elifdef SO_NOSIGPIPE
+  flags = SO_NOSIGPIPE;
+#endif
+
   while (*sent < buflen) {
-    ssize_t result = send(socket->sockfd, buf + *sent, buflen - *sent, 0);
+    ssize_t result = send(socket->sockfd, buf + *sent, buflen - *sent, flags);
 
     if (result > 0) {
       *sent += (size_t)result;

@@ -118,7 +118,7 @@ COLLECT_ONE_FILE:
   }
 }
 
-bool fileindex_contains_package(fileindex_t *fileindex, char *package,
+bool fileindex_contains_package(FileIndex *fileindex, char *package,
                                 bool *changed_during_transaction) {
   llrb_char_ptr_packagedata *packages = &fileindex->packages;
   PackageData packagedata;
@@ -135,7 +135,7 @@ bool fileindex_contains_package(fileindex_t *fileindex, char *package,
 // consuming the tree: each path key is either handed to the index or freed.
 // on return `claims` is empty (but not deleted!)
 // if the package already exists, don't crash
-void merge_claims_into_index(fileindex_t *fileindex, const char *package,
+void merge_claims_into_index(FileIndex *fileindex, const char *package,
                              llrb_char_ptr_fileclaim *claims,
                              bool simulate_installed) {
 
@@ -198,7 +198,7 @@ void merge_claims_into_index(fileindex_t *fileindex, const char *package,
 // not there.
 // leaves tombstone entry in packages to allow us to raise more meaningful
 // errors
-void remove_claims_from_index(fileindex_t *fileindex, char *package,
+void remove_claims_from_index(FileIndex *fileindex, char *package,
                               llrb_char_ptr_fileclaim *claims,
                               bool simulate_uninstall) {
   llrb_char_ptr_packagedata *packages = &fileindex->packages;
@@ -238,7 +238,7 @@ void remove_claims_from_index(fileindex_t *fileindex, char *package,
 // the files in it
 // only_installed (mandatory for now) only builds the index with installed files
 // (useful for ownership tests)
-ErrVal fileindex_build(fileindex_t *fileindex, const char *sysroot,
+ErrVal fileindex_build(FileIndex *fileindex, const char *sysroot,
                        char *pkgs_path) {
   llrb_char_ptr_packagedata *packages = &fileindex->packages;
   llrb_char_ptr_packagedata_new(packages);
@@ -313,7 +313,7 @@ static ErrVal file_crc32(const char *path, uint32_t *out, const char *op,
   return ERR_OK;
 }
 
-FileStatus *fileindex_status_or_default(fileindex_t *fileindex,
+FileStatus *fileindex_status_or_default(FileIndex *fileindex,
                                         const char *path, bool *created) {
   FileStatus *status;
   FileStatus default_status = {};
@@ -337,7 +337,7 @@ FileStatus *fileindex_status_or_default(fileindex_t *fileindex,
 // pass op and pkg to enable logging
 // creates an empty llrb leaf if needed
 // returns Indexdata pointer on success, NULL on failure
-FileStatus *fileindex_ensure_actual(fileindex_t *fileindex,
+FileStatus *fileindex_ensure_actual(FileIndex *fileindex,
                                     const char *fullpath,
                                     // logging purposes only
                                     const char *op, const char *pkg) {
@@ -394,7 +394,7 @@ static void delete_char_ptr_fileclaims(llrb_char_ptr_fileclaim *claims) {
   llrb_char_ptr_fileclaim_delete(claims);
 }
 
-void fileindex_delete(fileindex_t *fileindex) {
+void fileindex_delete(FileIndex *fileindex) {
   llrb_path_indexdata *index = &fileindex->index;
   llrb_path_indexdata_iter index_iter;
   llrb_path_indexdata_iter_begin(index, &index_iter);

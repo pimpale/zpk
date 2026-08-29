@@ -22,12 +22,16 @@
 #error "VEC_DTYPE must be defined before including vec.h"
 #endif
 
+#ifndef VEC_NAME
+#define VEC_NAME VEC_DTYPE
+#endif
+
 #include <stddef.h>
 #include <stdint.h>
 
 #define VEC_PASTE_(a, b) a##b
 #define VEC_PASTE(a, b) VEC_PASTE_(a, b)
-#define VEC_T VEC_PASTE(vec_, VEC_DTYPE)
+#define VEC_T VEC_PASTE(vec_, VEC_NAME)
 #define VEC_FN(suffix) VEC_PASTE(VEC_T, suffix)
 
 struct VEC_T {

@@ -77,9 +77,6 @@ void tcp_cleanup_portable(void) {
 
 TcpError tcp_connect_portable(TcpSocket **out, const char *hostname,
                               const char *port) {
-  if (out == NULL || hostname == NULL || port == NULL) {
-    return TCP_ERR_INVALID_ARGUMENT;
-  }
   *out = NULL;
 
   struct addrinfo hints = {0};
@@ -172,10 +169,6 @@ TcpError tcp_recv_portable(TcpSocket *socket, size_t *recvd, unsigned char *buf,
 
 TcpError tcp_send_portable(TcpSocket *socket, size_t *sent, const unsigned  char *buf,
                            size_t buflen) {
-  if (socket == NULL || sent == NULL || (buf == NULL && buflen != 0)) {
-    return TCP_ERR_INVALID_ARGUMENT;
-  }
-
   *sent = 0;
   while (*sent < buflen) {
     size_t remaining = buflen - *sent;
