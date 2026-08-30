@@ -1,4 +1,5 @@
 #include "client.h"
+#include "instances/vec_char.h"
 #include "tcpcompatlayer.h"
 #include "tcpcompatlayer_error.h"
 #include "tlsconfig.h"
@@ -147,23 +148,9 @@ static HttpClientError http_client_get_wcallback(
   return HTTP_CLIENT_ERR_OK;
 }
 
-typedef struct {
-  unsigned char *out;
-  size_t outlen;
-  size_t outcap;
-} ToMemContext;
-
 static HttpCallbackError tomem_callback(void *context, const unsigned char *buf, size_t buflen) {
-  ToMemContext *tmc = context;
-  if (tmc->outlen + buflen > tmc->outcap) {
-    tmc->outcap *= 2;
-    tmc->out = realloc(tmc->out, tmc->outcap);
-    if (tmc->out == NULL) {
-      return HTTP_CALLBACK_ERR_OUT_OF_MEMORY;
-    }
-  }
-  memcpy(tmc->out + tmc->outlen, buf, buflen);
-  tmc->outlen += buflen;
+  vec_char *ctx = context;
+  vec_char_pushv(ctx, (const char *)buf, buflen);
   return HTTP_CALLBACK_ERR_OK;
 }
 
@@ -179,22 +166,17 @@ HttpClientError http_client_get_tomem(
   const char *port,
   const char *path,
   TlsConfig *tls,
-  unsigned char **out,
-  size_t *outlen
+  vec_char *mem
 ) {
-  ToMemContext c = {.out = malloc(64), .outlen = 0, .outcap = 64};
-  HttpClientError e = http_client_get_wcallback(host, port, path, tls, &c, tomem_callback);
-  if (e == HTTP_CLIENT_ERR_OK) {
-    *out = c.out;
-    *outlen = c.outlen;
-  } else {
-    *out = NULL;
-    *outlen = 0;
-  }
-  return e;
+  return http_client_get_wcallback(host, port, path, tls, mem, tomem_callback);
 }
 
-HttpClientError
-http_client_get_tofile(const char *host, const char *port, const char *path, TlsConfig *tls, FILE *out) {
+HttpClientError http_client_get_tofile(
+  const char *host,
+  const char *port,
+  const char *path,
+  TlsConfig *tls,
+  FILE *out
+) {
   return http_client_get_wcallback(host, port, path, tls, out, tofile_callback);
 }

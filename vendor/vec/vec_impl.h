@@ -47,18 +47,22 @@ void VEC_FN(_push)(VEC_T *vec, const VEC_DTYPE *src) {
   vec->len++;
 }
 
-void VEC_FN(_append)(VEC_T *vec, const VEC_T *src) {
+void VEC_FN(_pushv)(VEC_T *vec, const VEC_DTYPE *src, size_t len) {
   if (src->len == 0) {
     return;
   }
-  if (vec->len + src->len > vec->cap) {
-    while (vec->len + src->len > vec->cap) {
+  if (vec->len + len > vec->cap) {
+    while (vec->len + len > vec->cap) {
       vec->cap *= 2;
     }
     vec->pData = (VEC_DTYPE*)realloc(vec->pData, vec->cap * sizeof(VEC_DTYPE));
   }
-  memcpy(&vec->pData[vec->len], src->pData, src->len * sizeof(VEC_DTYPE));
-  vec->len += src->len;
+  memcpy(&vec->pData[vec->len], src, len * sizeof(VEC_DTYPE));
+  vec->len += len;
+}
+
+void VEC_FN(_append)(VEC_T *vec, const VEC_T *src) {
+  VEC_FN(_append)(vec, src->pData, src->len);
 }
 
 void VEC_FN(_pop)(VEC_T *vec, VEC_DTYPE *dest) {

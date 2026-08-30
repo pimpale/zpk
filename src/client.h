@@ -4,6 +4,7 @@
 #include <stdio.h>
 
 #include "tlsconfig.h"
+#include "instances/vec_char.h"
 
 typedef enum {
   HTTP_CLIENT_ERR_OK = 0,
@@ -31,8 +32,7 @@ HttpClientError http_client_get_tomem(
   const char *port,
   const char *path,
   TlsConfig *tls,
-  unsigned char **out,
-  size_t *outlen
+  vec_char* mem
 );
 HttpClientError http_client_get_tofile(const char *host, const char *port, const char *path, TlsConfig *tls, FILE *out);
 

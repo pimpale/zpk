@@ -48,8 +48,8 @@ void VEC_FN(_delete)(VEC_T *vec);
 
 void VEC_FN(_push)(VEC_T *vec, const VEC_DTYPE *src);
 
-// Appends a shallow copy of every element of src onto vec. src is left
-// untouched; if elements own heap data, both vecs alias it afterwards.
+void VEC_FN(_pushv)(VEC_T *vec, const VEC_DTYPE *src, size_t n);
+
 void VEC_FN(_append)(VEC_T *vec, const VEC_T *src);
 
 void VEC_FN(_pop)(VEC_T *vec, VEC_DTYPE *dest);
