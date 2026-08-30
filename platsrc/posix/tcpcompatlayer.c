@@ -85,6 +85,7 @@ TcpError tcp_connect_portable(TcpSocket **out, const char *hostname, const char 
       close(sockfd);
     } else {
       // no error, use
+      lasterrno = 0;
       break;
     }
   }
