@@ -1,23 +1,3 @@
-// Generic dynamic-array template. Include with VEC_DTYPE set to a typedef'd
-// element type:
-//
-//   #define VEC_DTYPE process
-//   #include <vec/vec.h>
-//
-// Generates:
-//   typedef struct vec_process vec_process;
-//   void vec_process_new(vec_process **);
-//   void vec_process_push(vec_process *, const process *src);
-//   ... etc
-//
-// VEC_DTYPE must be a single identifier usable in token pasting (typedef the
-// struct if needed, e.g. `typedef struct process process;`). The element type
-// must be complete at include time (include its header before this one).
-//
-// This file has no header guard: include it once per VEC_DTYPE. It does not
-// #undef VEC_DTYPE — the caller is expected to either leave it for vec_impl.h
-// or #undef it before the next instantiation.
-
 #ifndef VEC_DTYPE
 #error "VEC_DTYPE must be defined before including vec.h"
 #endif
@@ -56,8 +36,6 @@ void VEC_FN(_pop)(VEC_T *vec, VEC_DTYPE *dest);
 
 void VEC_FN(_get)(const VEC_T *vec, size_t i, VEC_DTYPE *dest);
 
-// Pointer to element i, for in-place mutation. Invalidated by any push
-// (growth may realloc) — do not hold across mutating calls.
 VEC_DTYPE *VEC_FN(_at)(const VEC_T *vec, size_t i);
 
 // swaps i with the last element and then pops, deleting the data

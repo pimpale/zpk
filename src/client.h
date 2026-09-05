@@ -4,7 +4,7 @@
 #include <stdio.h>
 
 #include "tlsconfig.h"
-#include "instances/vec_char.h"
+#include "instances/vec_uint8_t.h"
 
 typedef enum {
   HTTP_CLIENT_ERR_OK = 0,
@@ -24,15 +24,29 @@ typedef enum {
   HTTP_CLIENT_ERR_TCP_ADDRESS_UNSUPPORTED,
   HTTP_CLIENT_ERR_TCP_IO,
   HTTP_CLIENT_ERR_TCP_UNKNOWN,
+  HTTP_CLIENT_ERR_TLS_CERTIFICATE,
+  HTTP_CLIENT_ERR_TLS_HOSTNAME_MISMATCH,
+  HTTP_CLIENT_ERR_TLS_PROTOCOL,
+  HTTP_CLIENT_ERR_TLS_ALERT,
+  HTTP_CLIENT_ERR_TLS_TRUNCATED,
+
+  // missing functionality 
+  HTTP_CLIENT_ERR_TODO,
+
+  // header parsing issues
+  HTTP_CLIENT_ERR_HEADER_MALFORMED,
+  HTTP_CLIENT_ERR_TRANSFER_METHOD_UNSUPPORTED
 
 } HttpClientError;
+
+const char *httpstrerror(HttpClientError error);
 
 HttpClientError http_client_get_tomem(
   const char *host,
   const char *port,
   const char *path,
   TlsConfig *tls,
-  vec_char* mem
+  vec_uint8_t* mem
 );
 HttpClientError http_client_get_tofile(const char *host, const char *port, const char *path, TlsConfig *tls, FILE *out);
 

@@ -13,7 +13,7 @@ struct tls_data {
   br_ssl_client_context client;
   br_x509_minimal_context x509;
   br_sslio_context io;
-  unsigned char iobuf[BR_SSL_BUFSIZE_BIDI];
+  uint8_t iobuf[BR_SSL_BUFSIZE_BIDI];
 
   TransportError last_lower_error;
   bool lower_eof;
@@ -95,7 +95,7 @@ static TransportError convert_tls_failure(const TlsData *tls) {
   return TRANSPORT_ERR_TLS_PROTOCOL;
 }
 
-static int tls_low_read(void *context, unsigned char *buf, size_t length) {
+static int tls_low_read(void *context, uint8_t *buf, size_t length) {
   TlsData *tls = context;
   size_t received = 0;
 
@@ -113,7 +113,7 @@ static int tls_low_read(void *context, unsigned char *buf, size_t length) {
   return (int)received;
 }
 
-static int tls_low_write(void *context, const unsigned char *buf, size_t length) {
+static int tls_low_write(void *context, const uint8_t *buf, size_t length) {
   TlsData *tls = context;
 
   TransportError error = transport_send(&tls->lower, buf, length);
@@ -156,29 +156,25 @@ TransportError transport_from_tcp(Transport *transport, TcpSocket *socket) {
 }
 
 TransportError
-transport_wrap_tls(Transport *transport, Transport *inner, const char *host, TlsConfig *tlsconfig) {
+transport_wrap_tls(Transport *transport, Transport inner, const char *host, TlsConfig *tlsconfig) {
   TlsData *tls = malloc(sizeof(*tls));
   if (tls == NULL) {
     return TRANSPORT_ERR_OUT_OF_MEMORY;
   }
 
-  tls->lower = *inner;
+  tls->lower = inner;
   TransportError error = tls_initialize(tls, host, tlsconfig);
   if (error != TRANSPORT_ERR_OK) {
     free(tls);
     return error;
   }
 
-  if (transport != inner) {
-    inner->use_tls = false;
-    inner->tcp = NULL;
-  }
   transport->use_tls = true;
   transport->tls = tls;
   return TRANSPORT_ERR_OK;
 }
 
-TransportError transport_send(Transport *transport, const unsigned char *buf, size_t buflen) {
+TransportError transport_send(Transport *transport, const uint8_t *buf, size_t buflen) {
   if (buflen == 0) {
     return TRANSPORT_ERR_OK;
   }
@@ -219,7 +215,7 @@ TransportError transport_send(Transport *transport, const unsigned char *buf, si
 }
 
 TransportError
-transport_recv(Transport *transport, unsigned char *buf, size_t buflen, size_t *received) {
+transport_recv(Transport *transport, uint8_t *buf, size_t buflen, size_t *received) {
   *received = 0;
   if (buflen == 0) {
     return TRANSPORT_ERR_OK;

@@ -47,7 +47,7 @@ TransportError transport_from_tcp(Transport *transport, TcpSocket *socket);
 
 // take ownership of the inner transport if no error
 TransportError
-transport_wrap_tls(Transport *transport, Transport *inner, const char *host, TlsConfig *tlsconfig);
+transport_wrap_tls(Transport *transport, Transport inner, const char *host, TlsConfig *tlsconfig);
 
 TransportError
 transport_send(Transport *transport, const unsigned char *buf, size_t buflen);

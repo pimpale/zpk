@@ -1,13 +1,3 @@
-// Generic dynamic-array template implementation. Include exactly once per
-// VEC_DTYPE, from a dedicated .c file in kernel/src/instances/:
-//
-//   #define VEC_DTYPE process
-//   #include "thread.h"            // brings in `process` typedef
-//   #include <vec/vec_impl.h>
-//
-// This file pulls in vec.h itself, so callers do not need to include it
-// separately. No header guard: each .c file instantiates one VEC_DTYPE.
-
 #ifndef VEC_DTYPE
 #error "VEC_DTYPE must be defined before including vec_impl.h"
 #endif
@@ -48,7 +38,7 @@ void VEC_FN(_push)(VEC_T *vec, const VEC_DTYPE *src) {
 }
 
 void VEC_FN(_pushv)(VEC_T *vec, const VEC_DTYPE *src, size_t len) {
-  if (src->len == 0) {
+  if (len == 0) {
     return;
   }
   if (vec->len + len > vec->cap) {
@@ -62,7 +52,7 @@ void VEC_FN(_pushv)(VEC_T *vec, const VEC_DTYPE *src, size_t len) {
 }
 
 void VEC_FN(_append)(VEC_T *vec, const VEC_T *src) {
-  VEC_FN(_append)(vec, src->pData, src->len);
+  VEC_FN(_pushv)(vec, src->pData, src->len);
 }
 
 void VEC_FN(_pop)(VEC_T *vec, VEC_DTYPE *dest) {

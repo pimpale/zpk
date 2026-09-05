@@ -297,7 +297,7 @@ static ErrVal file_crc32(const char *path, uint32_t *out, const char *op,
   defer fclose(f);
 
   mz_ulong crc = MZ_CRC32_INIT;
-  unsigned char buf[64 * 1024];
+  uint8_t buf[64 * 1024];
   size_t n;
   while ((n = fread(buf, 1, sizeof buf, f)) > 0)
     crc = mz_crc32(crc, buf, n);
