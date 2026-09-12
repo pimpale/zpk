@@ -1,4 +1,4 @@
-#include "client.h"
+#include "http_client.h"
 #include "tcpcompatlayer.h"
 #include "tcpcompatlayer_error.h"
 #include "tlsconfig.h"
@@ -221,6 +221,16 @@ http_client_parse_statusline(HttpResponseHeaders *headers, uint8_t *line, size_t
 
 // parses a number starting at buf. Returns false on error
 static bool http_client_parse_uint64_t(uint64_t *out, uint8_t *buf, size_t buflen) {
+  uint64_t a = 0;
+  for(size_t i = 0; i < buflen; i++) {
+    size_t digit = 0;
+    if(isdigit(buf[i])) {
+      digit
+    } else {
+      break;
+    }
+  }
+  
 }
 
 static HttpClientError
@@ -305,6 +315,188 @@ http_client_parse_response_headers(HttpResponseHeaders *headers, uint8_t *buf, s
   }
 }
 
+typedef enum {
+  CHUNK_SIZE,
+  CHUNK_EXT_WS1,
+  CHUNK_EXT,
+  CHUNK_SIZE_LF,
+  CHUNK_DATA,
+  CHUNK_DATA_CR,
+  CHUNK_DATA_LF,
+  TRAILER,
+  TRAILER_LF,
+  DONE
+} ChunkState;
+
+typedef struct {
+  ChunkState state;
+  size_t chunk_size;
+  size_t remaining_data;
+  bool line_empty;
+} ChunkParser;
+
+static HttpClientError parse_chunk(
+  ChunkParser *p,
+  const uint8_t *buf,
+  size_t buflen,
+  void *context,
+  HttpCallbackError (*callback)(void *context, const uint8_t *buf, size_t buflen)
+) {
+  for (size_t i = 0; i < buflen;) {
+    switch (p->state) {
+      case CHUNK_SIZE: {
+        size_t digit = 0;
+        ChunkState next_state = CHUNK_SIZE;
+        switch (buf[i]) {
+          case '0' ... '9':
+            digit = buf[i] - '0';
+            break;
+          case 'a' ... 'f':
+            digit = buf[i] - 'a' + 10;
+            break;
+          case 'A' ... 'F':
+            digit = buf[i] - 'A' + 10;
+            break;
+          case '\r':
+            next_state = CHUNK_SIZE_LF;
+            break;
+          case ' ':
+          case '\t':
+            next_state = CHUNK_EXT_WS1;
+            break;
+          case ';':
+            next_state = CHUNK_EXT;
+            break;
+          default:
+            return HTTP_CLIENT_ERR_RESPONSE_MALFORMED;
+        }
+        if (next_state == CHUNK_SIZE) {
+          if (p->chunk_size > (SIZE_MAX - digit) / 16) {
+            // it overflowed
+            return HTTP_CLIENT_ERR_RESPONSE_MALFORMED;
+          }
+          p->chunk_size = p->chunk_size * 16 + digit;
+          p->line_empty = false;
+        } else {
+          if (p->line_empty) {
+            return HTTP_CLIENT_ERR_RESPONSE_MALFORMED;
+          }
+          p->state = next_state;
+        }
+        i++;
+        break;
+      }
+      case CHUNK_EXT_WS1: {
+        switch (buf[i]) {
+          case ';':
+            p->state = CHUNK_EXT;
+            break;
+          case ' ':
+          case '\t':
+            break;
+          default:
+            return HTTP_CLIENT_ERR_RESPONSE_MALFORMED;
+        }
+        i++;
+        break;
+      }
+      case CHUNK_EXT:
+        // TODO: properly parse the chunk flags
+        switch (buf[i]) {
+          case '\r':
+            p->state = CHUNK_SIZE_LF;
+            break;
+          case '\n':
+            return HTTP_CLIENT_ERR_RESPONSE_MALFORMED;
+          default:
+            break;
+        }
+        i++;
+        break;
+
+      case CHUNK_SIZE_LF:
+        if (buf[i] == '\n') {
+          if (p->chunk_size == 0) {
+            p->state = TRAILER;
+            p->line_empty = true;
+          } else {
+            p->state = CHUNK_DATA;
+            p->remaining_data = p->chunk_size;
+          }
+        } else {
+          return HTTP_CLIENT_ERR_RESPONSE_MALFORMED;
+        }
+        i++;
+        break;
+      case CHUNK_DATA: {
+        size_t available = buflen - i;
+        size_t n = p->remaining_data < available ? p->remaining_data : available;
+        if (n != 0) {
+          HttpCallbackError e = callback(context, buf + i, n);
+          if (e != HTTP_CALLBACK_ERR_OK) {
+            return convert_callback_err(e);
+          }
+          i += n;
+          p->remaining_data -= n;
+        }
+        if (p->remaining_data == 0) {
+          p->state = CHUNK_DATA_CR;
+        }
+        break;
+      }
+      case CHUNK_DATA_CR:
+        if (buf[i] == '\r') {
+          p->state = CHUNK_DATA_LF;
+        } else {
+          return HTTP_CLIENT_ERR_RESPONSE_MALFORMED;
+        }
+        i++;
+        break;
+      case CHUNK_DATA_LF:
+        if (buf[i] == '\n') {
+          p->state = CHUNK_SIZE;
+          p->line_empty = true;
+          p->chunk_size = 0;
+        } else {
+          return HTTP_CLIENT_ERR_RESPONSE_MALFORMED;
+        }
+        i++;
+        break;
+      case TRAILER:
+        switch (buf[i]) {
+          case '\r':
+            p->state = TRAILER_LF;
+            break;
+          default:
+            p->line_empty = false;
+            break;
+        }
+        i++;
+        break;
+      case TRAILER_LF:
+        if (buf[i] == '\n') {
+          if (p->line_empty) {
+            p->state = DONE;
+          } else {
+            p->state = TRAILER;
+            p->line_empty = true;
+          }
+        } else {
+          return HTTP_CLIENT_ERR_RESPONSE_MALFORMED;
+        }
+        i++;
+        break;
+      case DONE:
+        // do nothing
+        i++;
+        break;
+    }
+  }
+  return HTTP_CLIENT_ERR_OK;
+}
+
+#define STREAMBUFSIZE 8192
+
 static HttpClientError http_client_parse_body_chunked_encoding(
   Transport *transport,
   uint8_t *bodystart,
@@ -312,7 +504,35 @@ static HttpClientError http_client_parse_body_chunked_encoding(
   void *context,
   HttpCallbackError (*callback)(void *context, const uint8_t *buf, size_t buflen)
 ) {
-  
+  ChunkParser p = {.line_empty = true};
+  HttpClientError bse = parse_chunk(&p, bodystart, bodystartlen, context, callback);
+  if (bse != HTTP_CLIENT_ERR_OK) {
+    return bse;
+  }
+  if (p.state == DONE) {
+    return HTTP_CLIENT_ERR_OK;
+  }
+  uint8_t buf[STREAMBUFSIZE] = {};
+  while (true) {
+    size_t received;
+    TransportError te = transport_recv(transport, buf, sizeof(buf), &received);
+    if (te != TRANSPORT_ERR_OK) {
+      return convert_transport_error(te);
+    }
+    HttpClientError e = parse_chunk(&p, buf, received, context, callback);
+    if (e != HTTP_CLIENT_ERR_OK) {
+      return e;
+    }
+    if (received == 0 || p.state == DONE) {
+      // no more
+      break;
+    }
+  }
+
+  if (p.state != DONE) {
+    return HTTP_CLIENT_ERR_RESPONSE_TRUNCATED;
+  }
+  return HTTP_CLIENT_ERR_OK;
 }
 
 static HttpClientError http_client_parse_body_content_length(
@@ -324,6 +544,35 @@ static HttpClientError http_client_parse_body_content_length(
   bool has_content_length,
   size_t content_length
 ) {
+  HttpCallbackError bse = callback(context, bodystart, bodystartlen);
+  if (bse != HTTP_CALLBACK_ERR_OK) {
+    return convert_callback_err(bse);
+  }
+  size_t content_seen = 0;
+  uint8_t buf[STREAMBUFSIZE] = {};
+  while (true) {
+    size_t buflen = has_content_length && content_length - content_seen < sizeof(buf)
+      ? content_length - content_seen
+      : sizeof(buf);
+    size_t received;
+    TransportError te = transport_recv(transport, buf, buflen, &received);
+    if (te != TRANSPORT_ERR_OK) {
+      return convert_transport_error(te);
+    }
+    HttpCallbackError e = callback(context, buf, received);
+    if (bse != HTTP_CALLBACK_ERR_OK) {
+      return convert_callback_err(e);
+    }
+    content_seen += received;
+    if (received == 0) {
+      // no more
+      break;
+    }
+  }
+  if (has_content_length && content_seen < content_length) {
+    return HTTP_CLIENT_ERR_RESPONSE_TRUNCATED;
+  }
+  return HTTP_CLIENT_ERR_OK;
 }
 
 static bool has_memstr(const uint8_t *buf, size_t buflen, const char *needle) {
@@ -398,6 +647,7 @@ static HttpClientError http_client_get_wcallback(
     return convert_transport_error(se);
   }
 
+  // most practical implementations will reject over 64k so we do too
   uint8_t respb[65536];
   size_t respb_len = 0;
   while (respb_len < sizeof(respb)) {
