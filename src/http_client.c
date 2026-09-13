@@ -1,7 +1,8 @@
 #include "http_client.h"
+#include "instances/slice_uint8_t.h"
+#include "instances/vec_slice_uint8_t.h"
 #include "tcpcompatlayer.h"
 #include "tcpcompatlayer_error.h"
-#include "tlsconfig.h"
 #include "transport.h"
 #include <asprintf/asprintf.h>
 #include <ctype.h>
@@ -12,12 +13,6 @@
 #include <string.h>
 
 #define USER_AGENT "zpk"
-
-typedef enum {
-  HTTP_CALLBACK_ERR_OK = 0,
-  HTTP_CALLBACK_ERR_OUT_OF_MEMORY,
-  HTTP_CALLBACK_ERR_IO
-} HttpCallbackError;
 
 static HttpClientError convert_callback_err(HttpCallbackError e) {
   switch (e) {
@@ -160,6 +155,16 @@ const char *httpstrerror(HttpClientError error) {
       return "TLS peer sent a fatal alert";
     case HTTP_CLIENT_ERR_TLS_TRUNCATED:
       return "TLS connection was truncated";
+    case HTTP_CLIENT_ERR_TODO:
+      return "unimplemented feature (file a bug report)";
+    case HTTP_CLIENT_ERR_HEADER_MALFORMED:
+      return "header is malformed";
+    case HTTP_CLIENT_ERR_TRANSFER_ENCODING_UNSUPPORTED:
+      return "transfer encoding is unsupported";
+    case HTTP_CLIENT_ERR_RESPONSE_MALFORMED:
+      return "response is malformed";
+    case HTTP_CLIENT_ERR_RESPONSE_TRUNCATED:
+      return "response is truncated";
   }
 }
 
@@ -185,6 +190,19 @@ static bool case_insensitive_buf_str_eq(const uint8_t *buf, size_t buflen, const
   }
   for (size_t i = 0; i < buflen; i++) {
     if (ascii_lower(buf[i]) != s2[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static bool case_insensitive_str_str_eq(const char *s1, const char *s2) {
+  size_t len = strlen(s1);
+  if (len != strlen(s2)) {
+    return false;
+  }
+  for (size_t i = 0; i < len; i++) {
+    if (ascii_lower((uint8_t)s1[i]) != s2[i]) {
       return false;
     }
   }
@@ -219,18 +237,145 @@ http_client_parse_statusline(HttpResponseHeaders *headers, uint8_t *line, size_t
   return HTTP_CLIENT_ERR_OK;
 }
 
-// parses a number starting at buf. Returns false on error
-static bool http_client_parse_uint64_t(uint64_t *out, uint8_t *buf, size_t buflen) {
-  uint64_t a = 0;
-  for(size_t i = 0; i < buflen; i++) {
+// parses a number. Returns false on error
+static bool http_client_parse_header_number(uint64_t *out, uint8_t *line, size_t linelen) {
+  bool line_empty = true;
+  bool finished_number = false;
+  *out = 0;
+  for (size_t i = 0; i < linelen; i++) {
     size_t digit = 0;
-    if(isdigit(buf[i])) {
-      digit
-    } else {
-      break;
+    switch (line[i]) {
+      case '0' ... '9':
+        if (finished_number) {
+          // number restarted after whitespace, malformed
+          return false;
+        }
+        digit = line[i] - '0';
+        line_empty = false;
+        break;
+      case '\t':
+      case ' ':
+        if (!line_empty) {
+          finished_number = true;
+        }
+        continue;
+      default:
+        // bad char
+        return false;
+    }
+
+    if (*out > (UINT64_MAX - digit) / 10) {
+      return false;
+    }
+    *out = *out * 10 + digit;
+  }
+
+  return !line_empty;
+}
+
+static bool istokenc(uint8_t c) {
+  switch (c) {
+    case '0' ... '9':
+    case 'a' ... 'z':
+    case 'A' ... 'Z':
+    case '!':
+    case '#':
+    case '$':
+    case '%':
+    case '&':
+    case '\'':
+    case '*':
+    case '+':
+    case '-':
+    case '.':
+    case '^':
+    case '_':
+    case '`':
+    case '|':
+    case '~':
+      return true;
+    default:
+      return false;
+  }
+}
+
+// parses a list of tokens, returning false on error
+static HttpClientError
+http_client_parse_header_token_list(vec_slice_uint8_t *l, uint8_t *line, size_t linelen) {
+  typedef enum {
+    LIST_BEFORE_TOKEN,
+    LIST_IN_TOKEN,
+    LIST_AFTER_TOKEN
+  } ListState;
+
+  ListState state = LIST_BEFORE_TOKEN;
+  size_t starti = 0;
+  for (size_t i = 0; i < linelen; i++) {
+    switch (state) {
+      case LIST_BEFORE_TOKEN:
+        switch (line[i]) {
+          case ' ':
+          case '\t':
+            break;
+          case ',':
+            // empty entry
+            break;
+          default:
+            if (istokenc(line[i])) {
+              starti = i;
+              state = LIST_IN_TOKEN;
+            } else {
+              return HTTP_CLIENT_ERR_HEADER_MALFORMED;
+            }
+        }
+        break;
+      case LIST_IN_TOKEN:
+        switch (line[i]) {
+          case ',': {
+            slice_uint8_t p = {.data = line + starti, .len = i - starti};
+            if (vec_slice_uint8_t_push(l, &p) != 0) {
+              return HTTP_CLIENT_ERR_OUT_OF_MEMORY;
+            }
+            state = LIST_BEFORE_TOKEN;
+            break;
+          }
+          case ' ':
+          case '\t': {
+            slice_uint8_t p = {.data = line + starti, .len = i - starti};
+            if (vec_slice_uint8_t_push(l, &p) != 0) {
+              return HTTP_CLIENT_ERR_OUT_OF_MEMORY;
+            }
+            state = LIST_AFTER_TOKEN;
+            break;
+          }
+          default:
+            if (!istokenc(line[i])) {
+              return HTTP_CLIENT_ERR_HEADER_MALFORMED;
+            }
+            break;
+        }
+        break;
+      case LIST_AFTER_TOKEN:
+        switch (line[i]) {
+          case ',':
+            state = LIST_BEFORE_TOKEN;
+            break;
+          case ' ':
+          case '\t':
+            break;
+          default:
+            return HTTP_CLIENT_ERR_HEADER_MALFORMED;
+        }
+        break;
     }
   }
-  
+  if (state == LIST_IN_TOKEN) {
+    slice_uint8_t p = {.data = line + starti, .len = linelen - starti};
+    if (vec_slice_uint8_t_push(l, &p) != 0) {
+      return HTTP_CLIENT_ERR_OUT_OF_MEMORY;
+    }
+  }
+  return HTTP_CLIENT_ERR_OK;
 }
 
 static HttpClientError
@@ -240,28 +385,38 @@ http_client_parse_header(HttpResponseHeaders *headers, uint8_t *line, size_t lin
     return HTTP_CLIENT_ERR_HEADER_MALFORMED;
   }
   size_t keylen = (size_t)(key_end - line);
-
-  // skip whitespace post-colon
   size_t off = keylen + 1;
-  while (off < linelen && (line[off] == ' ' || line[off] == '\t')) {
-    off++;
-  }
 
   // now we branch based on the key value
-
   if (case_insensitive_buf_str_eq(line, keylen, "content-length")) {
+    if (headers->has_content_length) {
+      return HTTP_CLIENT_ERR_HEADER_MALFORMED;
+    }
     headers->has_content_length = true;
-    if (!http_client_parse_uint64_t(&headers->content_length, line + off, linelen - off)) {
+    if (!http_client_parse_header_number(&headers->content_length, line + off, linelen - off)) {
       return HTTP_CLIENT_ERR_HEADER_MALFORMED;
     }
   } else if (case_insensitive_buf_str_eq(line, keylen, "transfer-encoding")) {
-    if (!case_insensitive_buf_str_eq(line + off, linelen - off, "chunked")) {
-      return HTTP_CLIENT_ERR_TRANSFER_METHOD_UNSUPPORTED;
+    if (headers->transfer_encoding_chunked) {
+      return HTTP_CLIENT_ERR_HEADER_MALFORMED;
+    }
+    vec_slice_uint8_t tokens;
+    vec_slice_uint8_t_init(&tokens);
+    defer vec_slice_uint8_t_delete(&tokens);
+    HttpClientError e = http_client_parse_header_token_list(&tokens, line + off, linelen - off);
+    if (e != HTTP_CLIENT_ERR_OK) {
+      return e;
+    }
+    if (vec_slice_uint8_t_len(&tokens) != 1) {
+      return HTTP_CLIENT_ERR_TRANSFER_ENCODING_UNSUPPORTED;
+    }
+    slice_uint8_t p = *vec_slice_uint8_t_at(&tokens, 0);
+    if (!case_insensitive_buf_str_eq(p.data, p.len, "chunked")) {
+      return HTTP_CLIENT_ERR_TRANSFER_ENCODING_UNSUPPORTED;
     }
     headers->transfer_encoding_chunked = true;
   }
 
-  // otherwise we just ignore everything
   return HTTP_CLIENT_ERR_OK;
 }
 
@@ -542,15 +697,21 @@ static HttpClientError http_client_parse_body_content_length(
   void *context,
   HttpCallbackError (*callback)(void *context, const uint8_t *buf, size_t buflen),
   bool has_content_length,
-  size_t content_length
+  uint64_t content_length
 ) {
+  if (has_content_length && bodystartlen >= content_length) {
+    // we might have all the data we need already
+    return convert_callback_err(callback(context, bodystart, content_length));
+  }
+
+  // otherwise we need to keep reading
   HttpCallbackError bse = callback(context, bodystart, bodystartlen);
   if (bse != HTTP_CALLBACK_ERR_OK) {
     return convert_callback_err(bse);
   }
-  size_t content_seen = 0;
+  uint64_t content_seen = bodystartlen;
   uint8_t buf[STREAMBUFSIZE] = {};
-  while (true) {
+  while (!has_content_length || content_seen < content_length) {
     size_t buflen = has_content_length && content_length - content_seen < sizeof(buf)
       ? content_length - content_seen
       : sizeof(buf);
@@ -560,7 +721,7 @@ static HttpClientError http_client_parse_body_content_length(
       return convert_transport_error(te);
     }
     HttpCallbackError e = callback(context, buf, received);
-    if (bse != HTTP_CALLBACK_ERR_OK) {
+    if (e != HTTP_CALLBACK_ERR_OK) {
       return convert_callback_err(e);
     }
     content_seen += received;
@@ -595,11 +756,15 @@ static bool has_memstr(const uint8_t *buf, size_t buflen, const char *needle) {
   return false;
 }
 
-static HttpClientError http_client_get_wcallback(
+HttpClientError http_client_get(
+  HttpProtocol protocol,
   const char *host,
   const char *port,
   const char *path,
-  TlsConfig *tls,
+  // https-specific
+  vec_br_x509_trust_anchor *anchors,
+  bool strict_ssl,
+  // callback
   void *context,
   HttpCallbackError (*callback)(void *context, const uint8_t *buf, size_t buflen)
 ) {
@@ -616,15 +781,18 @@ static HttpClientError http_client_get_wcallback(
     return convert_transport_error(ite);
   }
 
-  // maybe add TLS
   Transport transport;
-  if (tls == NULL) {
-    transport = inner;
-  } else {
-    TransportError te = transport_wrap_tls(&transport, inner, host, tls);
-    if (te != TRANSPORT_ERR_OK) {
-      transport_close(&inner);
-      return convert_transport_error(te);
+  switch (protocol) {
+    case HTTP_PROTOCOL_HTTP:
+      transport = inner;
+      break;
+    case HTTP_PROTOCOL_HTTPS: {
+      TransportError te = transport_wrap_tls(&transport, inner, host, anchors, strict_ssl);
+      if (te != TRANSPORT_ERR_OK) {
+        transport_close(&inner);
+        return convert_transport_error(te);
+      }
+      break;
     }
   }
   defer transport_close(&transport);
@@ -699,37 +867,4 @@ static HttpClientError http_client_get_wcallback(
       hrh.content_length
     );
   }
-}
-
-static HttpCallbackError tomem_callback(void *context, const uint8_t *buf, size_t buflen) {
-  vec_uint8_t *ctx = context;
-  vec_uint8_t_pushv(ctx, buf, buflen);
-  return HTTP_CALLBACK_ERR_OK;
-}
-
-static HttpCallbackError tofile_callback(void *context, const uint8_t *buf, size_t buflen) {
-  FILE *f = context;
-  size_t written = fwrite(buf, 1, buflen, f);
-  // error if written < buflen
-  return written == buflen ? HTTP_CALLBACK_ERR_OK : HTTP_CALLBACK_ERR_IO;
-}
-
-HttpClientError http_client_get_tomem(
-  const char *host,
-  const char *port,
-  const char *path,
-  TlsConfig *tls,
-  vec_uint8_t *mem
-) {
-  return http_client_get_wcallback(host, port, path, tls, mem, tomem_callback);
-}
-
-HttpClientError http_client_get_tofile(
-  const char *host,
-  const char *port,
-  const char *path,
-  TlsConfig *tls,
-  FILE *out
-) {
-  return http_client_get_wcallback(host, port, path, tls, out, tofile_callback);
 }

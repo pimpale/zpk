@@ -46,7 +46,9 @@ static int do_add(ZpkConfiguration *conf, vec_char_ptr *packages) {
       packages,
       conf->cached_pkgs_path,
       false,
-      true
+      true,
+      &conf->cacert_paths,
+      conf->strict_ssl
     )
     != ERR_OK
   ) {
@@ -269,7 +271,9 @@ static int do_list(
         NULL,
         conf->cached_pkgs_path,
         true,
-        false
+        false,
+        &conf->cacert_paths,
+        conf->strict_ssl
       )
       != ERR_OK
     ) {

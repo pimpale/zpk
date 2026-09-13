@@ -7,10 +7,5 @@ void delete_ResolvedPackage(ResolvedPackage *rp) {
   free(rp->package_path);
   free(rp->repository);
   free(rp->version);
-}
-
-char* entryname(ResolvedPackage *rp) {
-  char* out;
-  asprintf(&out, "%s-%s.zip", rp->package, rp->version);
-  return out;
+  free(rp->entry);
 }

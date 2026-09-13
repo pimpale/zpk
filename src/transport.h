@@ -2,7 +2,7 @@
 #define transport_h_INCLUDED
 
 #include "tcpcompatlayer.h"
-#include "tlsconfig.h"
+#include "instances/vec_br_x509_trust_anchor.h"
 #include <bearssl/inc/bearssl.h>
 
 typedef enum {
@@ -47,7 +47,7 @@ TransportError transport_from_tcp(Transport *transport, TcpSocket *socket);
 
 // take ownership of the inner transport if no error
 TransportError
-transport_wrap_tls(Transport *transport, Transport inner, const char *host, TlsConfig *tlsconfig);
+transport_wrap_tls(Transport *transport, Transport inner, const char *host, vec_br_x509_trust_anchor *anchors, bool strict_ssl);
 
 TransportError
 transport_send(Transport *transport, const unsigned char *buf, size_t buflen);

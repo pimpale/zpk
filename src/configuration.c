@@ -39,9 +39,7 @@ static char *resolve_config_relative(const char *config_path, const char *raw) {
   return resolved;
 }
 
-// validates one apk-style protected path rule from config key `key` and
-// appends a copy to out. rules are sysroot-relative masks, so unlike
-// repositories they are never resolved against the config file's directory
+// rules are sysroot-relative
 static void push_protected_path(
   vec_char_ptr *out,
   const char *config_path,

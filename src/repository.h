@@ -5,6 +5,7 @@
 #include "instances/llrb_char_ptr_resolvedpackage.h"
 #include "instances/vec_char_ptr.h"
 
+
 bool package_data(
     // if not NULL, allocates a string containing just the package name
     char **package_name,
@@ -30,7 +31,9 @@ ErrVal resolve_and_fetch_package_paths_repositories(
     vec_char_ptr *packages,
     const char *cache_directory,
     bool none_is_all,
-    bool download
+    bool download,
+    vec_char_ptr *cacert_paths,
+    bool strict_ssl
 );
 
 bool version_is_greater(char *a, char *b);

@@ -23,19 +23,25 @@ struct VECDEQUE_T {
 
 typedef struct VECDEQUE_T VECDEQUE_T;
 
-void VECDEQUE_FN(_init)(VECDEQUE_T *vecdeque);
-void VECDEQUE_FN(_init_cap)(VECDEQUE_T *vecdeque, size_t cap);
+
+typedef enum VecDequeError {
+  VECDEQUE_ERR_OK = 0,
+  VECDEQUE_ERR_OUT_OF_MEMORY
+} VecDequeError;
+
+VecDequeError VECDEQUE_FN(_init)(VECDEQUE_T *vecdeque);
+VecDequeError VECDEQUE_FN(_init_cap)(VECDEQUE_T *vecdeque, size_t cap);
 void VECDEQUE_FN(_delete)(VECDEQUE_T *vecdeque);
 
-void VECDEQUE_FN(_push_back)(VECDEQUE_T *vecdeque, const VECDEQUE_DTYPE *src);
+VecDequeError VECDEQUE_FN(_push_back)(VECDEQUE_T *vecdeque, const VECDEQUE_DTYPE *src);
 // repeated push back
-void VECDEQUE_FN(_push_backv)(VECDEQUE_T *vecdeque, const VECDEQUE_DTYPE *src, size_t n);
+VecDequeError VECDEQUE_FN(_push_backv)(VECDEQUE_T *vecdeque, const VECDEQUE_DTYPE *src, size_t n);
 
-void VECDEQUE_FN(_push_front)(VECDEQUE_T *vecdeque, const VECDEQUE_DTYPE *src);
+VecDequeError VECDEQUE_FN(_push_front)(VECDEQUE_T *vecdeque, const VECDEQUE_DTYPE *src);
 // repeated push front
-void VECDEQUE_FN(_push_frontv)(VECDEQUE_T *vecdeque, const VECDEQUE_DTYPE *src, size_t n);
+VecDequeError VECDEQUE_FN(_push_frontv)(VECDEQUE_T *vecdeque, const VECDEQUE_DTYPE *src, size_t n);
 // repeated push front, but iterates src in reverse (useful for loading buffer) 
-void VECDEQUE_FN(_push_frontv_rev)(VECDEQUE_T *vecdeque, const VECDEQUE_DTYPE *src, size_t n);
+VecDequeError VECDEQUE_FN(_push_frontv_rev)(VECDEQUE_T *vecdeque, const VECDEQUE_DTYPE *src, size_t n);
 
 void VECDEQUE_FN(_pop_back)(VECDEQUE_T *vecdeque, VECDEQUE_DTYPE *dest);
 void VECDEQUE_FN(_pop_backv)(VECDEQUE_T *vecdeque, VECDEQUE_DTYPE *dest, size_t n);

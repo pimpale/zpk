@@ -1,17 +1,25 @@
 #include "transport.h"
 #include "tcpcompatlayer.h"
 #include "tcpcompatlayer_error.h"
-#include "tlsconfig.h"
 
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
+
+typedef struct {
+  const br_x509_class *vtable; // vtable must be first.
+  br_x509_decoder_context decoder;
+  size_t certificate_count;
+  unsigned error;
+} InsecureX509;
+
 
 struct tls_data {
   Transport lower;
 
   br_ssl_client_context client;
   br_x509_minimal_context x509;
+  InsecureX509 insecure_x509;
   br_sslio_context io;
   uint8_t iobuf[BR_SSL_BUFSIZE_BIDI];
 
@@ -125,17 +133,20 @@ static int tls_low_write(void *context, const uint8_t *buf, size_t length) {
   return (int)length;
 }
 
-static TransportError tls_initialize(TlsData *tls, const char *host, TlsConfig *tlsconfig) {
+static TransportError
+tls_initialize(TlsData *tls, const char *host, vec_br_x509_trust_anchor *anchors, bool strict_ssl) {
   tls->last_lower_error = TRANSPORT_ERR_OK;
   tls->lower_eof = false;
   memset(tls->iobuf, 0, sizeof(tls->iobuf));
 
-  br_ssl_client_init_full(
-    &tls->client,
-    &tls->x509,
-    tlsconfig->trust_anchors,
-    tlsconfig->trust_anchor_count
-  );
+  br_ssl_client_init_full(&tls->client, &tls->x509, anchors->pData, anchors->len);
+
+  if (!strict_ssl) {
+    // TODO:
+    // insecure_x509_init(&tls->insecure_x509);
+    br_ssl_engine_set_x509(&tls->client.eng, &tls->insecure_x509.vtable);
+  }
+
   br_ssl_engine_set_buffer(&tls->client.eng, tls->iobuf, sizeof(tls->iobuf), 1);
   br_ssl_engine_set_versions(&tls->client.eng, BR_TLS12, BR_TLS12);
   br_sslio_init(&tls->io, &tls->client.eng, tls_low_read, tls, tls_low_write, tls);
@@ -155,15 +166,20 @@ TransportError transport_from_tcp(Transport *transport, TcpSocket *socket) {
   return TRANSPORT_ERR_OK;
 }
 
-TransportError
-transport_wrap_tls(Transport *transport, Transport inner, const char *host, TlsConfig *tlsconfig) {
+TransportError transport_wrap_tls(
+  Transport *transport,
+  Transport inner,
+  const char *host,
+  vec_br_x509_trust_anchor *anchors,
+  bool strict_ssl
+) {
   TlsData *tls = malloc(sizeof(*tls));
   if (tls == NULL) {
     return TRANSPORT_ERR_OUT_OF_MEMORY;
   }
 
   tls->lower = inner;
-  TransportError error = tls_initialize(tls, host, tlsconfig);
+  TransportError error = tls_initialize(tls, host, anchors, strict_ssl);
   if (error != TRANSPORT_ERR_OK) {
     free(tls);
     return error;
@@ -214,8 +230,7 @@ TransportError transport_send(Transport *transport, const uint8_t *buf, size_t b
   }
 }
 
-TransportError
-transport_recv(Transport *transport, uint8_t *buf, size_t buflen, size_t *received) {
+TransportError transport_recv(Transport *transport, uint8_t *buf, size_t buflen, size_t *received) {
   *received = 0;
   if (buflen == 0) {
     return TRANSPORT_ERR_OK;

@@ -14,23 +14,26 @@
 #define VEC_T VEC_PASTE(vec_, VEC_NAME)
 #define VEC_FN(suffix) VEC_PASTE(VEC_T, suffix)
 
-struct VEC_T {
+typedef struct VEC_T {
   VEC_DTYPE *pData;
   size_t cap;
   size_t len;
-};
+} VEC_T;
 
-typedef struct VEC_T VEC_T;
+typedef enum VecError {
+  VEC_ERR_OK = 0,
+  VEC_ERR_OUT_OF_MEMORY,
+} VecError;
 
-void VEC_FN(_init)(VEC_T *vec);
-void VEC_FN(_init_cap)(VEC_T *vec, size_t cap);
+VecError VEC_FN(_init)(VEC_T *vec);
+VecError VEC_FN(_init_cap)(VEC_T *vec, size_t cap);
 void VEC_FN(_delete)(VEC_T *vec);
 
-void VEC_FN(_push)(VEC_T *vec, const VEC_DTYPE *src);
+VecError VEC_FN(_push)(VEC_T *vec, const VEC_DTYPE *src);
 
-void VEC_FN(_pushv)(VEC_T *vec, const VEC_DTYPE *src, size_t n);
+VecError VEC_FN(_pushv)(VEC_T *vec, const VEC_DTYPE *src, size_t n);
 
-void VEC_FN(_append)(VEC_T *vec, const VEC_T *src);
+VecError VEC_FN(_append)(VEC_T *vec, const VEC_T *src);
 
 void VEC_FN(_pop)(VEC_T *vec, VEC_DTYPE *dest);
 

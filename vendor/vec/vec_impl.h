@@ -18,41 +18,48 @@
 #define VEC_T VEC_PASTE(vec_, VEC_NAME)
 #define VEC_FN(suffix) VEC_PASTE(VEC_T, suffix)
 
-void VEC_FN(_init)(VEC_T *vec) {
-  VEC_FN(_init_cap)(vec, 16);
+VecError VEC_FN(_init)(VEC_T *vec) {
+  return VEC_FN(_init_cap)(vec, 16);
 }
 
-void VEC_FN(_init_cap)(VEC_T *vec, size_t cap) {
+VecError VEC_FN(_init_cap)(VEC_T *vec, size_t cap) {
   vec->len = 0;
   vec->cap = cap;
   vec->pData = (VEC_DTYPE*)malloc(vec->cap * sizeof(VEC_DTYPE));
-}
-
-void VEC_FN(_push)(VEC_T *vec, const VEC_DTYPE *src) {
-  if (vec->len >= vec->cap) {
-    vec->cap *= 2;
-    vec->pData = (VEC_DTYPE*)realloc(vec->pData, vec->cap * sizeof(VEC_DTYPE));
+  if(vec->pData == NULL) {
+    return VEC_ERR_OUT_OF_MEMORY;
+  } else {
+    return VEC_ERR_OK;
   }
-  vec->pData[vec->len] = *src;
-  vec->len++;
 }
 
-void VEC_FN(_pushv)(VEC_T *vec, const VEC_DTYPE *src, size_t len) {
+VecError VEC_FN(_push)(VEC_T *vec, const VEC_DTYPE *src) {
+  return VEC_FN(_pushv)(vec, src, 1); 
+}
+
+VecError VEC_FN(_pushv)(VEC_T *vec, const VEC_DTYPE *src, size_t len) {
   if (len == 0) {
-    return;
+    return VEC_ERR_OK;
   }
   if (vec->len + len > vec->cap) {
-    while (vec->len + len > vec->cap) {
-      vec->cap *= 2;
+    size_t newcap = vec->cap;
+    while (vec->len + len > newcap) {
+      newcap *= 2;
     }
-    vec->pData = (VEC_DTYPE*)realloc(vec->pData, vec->cap * sizeof(VEC_DTYPE));
+    void* grown = realloc(vec->pData, newcap * sizeof(VEC_DTYPE));
+    if(grown == NULL) {
+      return VEC_ERR_OUT_OF_MEMORY;
+    }
+    vec->pData = grown;
+    vec->cap = newcap;
   }
   memcpy(&vec->pData[vec->len], src, len * sizeof(VEC_DTYPE));
   vec->len += len;
+  return VEC_ERR_OK;
 }
 
-void VEC_FN(_append)(VEC_T *vec, const VEC_T *src) {
-  VEC_FN(_pushv)(vec, src->pData, src->len);
+VecError VEC_FN(_append)(VEC_T *vec, const VEC_T *src) {
+  return VEC_FN(_pushv)(vec, src->pData, src->len);
 }
 
 void VEC_FN(_pop)(VEC_T *vec, VEC_DTYPE *dest) {

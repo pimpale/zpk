@@ -18,7 +18,7 @@ int copy_file(const char *from, const char *to) {
 
   char buf[64 * 1024];
   size_t n;
-  while ((n = fread(buf, 1, sizeof buf, src)) > 0) {
+  while ((n = fread(buf, 1, sizeof(buf), src)) > 0) {
     if (fwrite(buf, 1, n, dst) != n) {
       int saved_errno = errno;
       fclose(src);
@@ -35,8 +35,35 @@ int copy_file(const char *from, const char *to) {
     return -1;
   }
   fclose(src);
-  // the last buffered write can only fail here, so this close is load-bearing
   if (fclose(dst) != 0) {
+    return -1;
+  }
+  return 0;
+}
+
+
+int read_file(const char *path, vec_uint8_t *out) {
+  FILE *src = fopen(path, "rb");
+  if (src == NULL) {
+    return -1;
+  }
+
+  uint8_t buf[64 * 1024];
+  size_t n;
+  while ((n = fread(buf, 1, sizeof(buf), src)) > 0) {
+    if (vec_uint8_t_pushv(out, buf, n) != 0) {
+      fclose(src);
+      errno = ENOMEM;
+      return -1;
+    }
+  }
+  if (ferror(src) != 0) {
+    int saved_errno = errno;
+    fclose(src);
+    errno = saved_errno;
+    return -1;
+  }
+  if(fclose(src) != 0) {
     return -1;
   }
   return 0;

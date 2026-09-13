@@ -18,27 +18,36 @@
 #define VECDEQUE_T VECDEQUE_PASTE(vecdeque_, VECDEQUE_NAME)
 #define VECDEQUE_FN(suffix) VECDEQUE_PASTE(VECDEQUE_T, suffix)
 
-void VECDEQUE_FN(_init)(VECDEQUE_T *vecdeque) {
-  VECDEQUE_FN(_init_cap)(vecdeque, 16);
+VecDequeError VECDEQUE_FN(_init)(VECDEQUE_T *vecdeque) {
+  return VECDEQUE_FN(_init_cap)(vecdeque, 16);
 }
 
-void VECDEQUE_FN(_init_cap)(VECDEQUE_T *vecdeque, size_t cap) {
+VecDequeError VECDEQUE_FN(_init_cap)(VECDEQUE_T *vecdeque, size_t cap) {
   vecdeque->len = 0;
   vecdeque->cap = cap;
   vecdeque->head = 0;
   vecdeque->pData = (VECDEQUE_DTYPE *)malloc(vecdeque->cap * sizeof(VECDEQUE_DTYPE));
+  if (vecdeque->pData == NULL) {
+    return VECDEQUE_ERR_OUT_OF_MEMORY;
+  } else {
+    return VECDEQUE_ERR_OK;
+  }
 }
 
 // have at least these many slots
-static void VECDEQUE_FN(_grow)(VECDEQUE_T *vecdeque, size_t at_least_cap) {
+static VecDequeError VECDEQUE_FN(_grow)(VECDEQUE_T *vecdeque, size_t at_least_cap) {
   if (vecdeque->cap >= at_least_cap) {
-    return;
+    return VECDEQUE_ERR_OK;
   }
   size_t new_cap = 1;
   while (new_cap < at_least_cap) {
     new_cap *= 2;
   }
-  vecdeque->pData = realloc(vecdeque->pData, new_cap * sizeof(VECDEQUE_DTYPE));
+  void *newdata = realloc(vecdeque->pData, new_cap * sizeof(VECDEQUE_DTYPE));
+  if (newdata == NULL) {
+    return VECDEQUE_ERR_OUT_OF_MEMORY;
+  }
+  vecdeque->pData = newdata;
   if (vecdeque->head + vecdeque->len > vecdeque->cap) {
     memmove(
       vecdeque->pData + vecdeque->head + (new_cap - vecdeque->cap),
@@ -48,47 +57,64 @@ static void VECDEQUE_FN(_grow)(VECDEQUE_T *vecdeque, size_t at_least_cap) {
     vecdeque->head = vecdeque->head + (new_cap - vecdeque->cap);
   }
   vecdeque->cap = new_cap;
+  return VECDEQUE_ERR_OK;
 }
 
-void VECDEQUE_FN(_push_backv)(VECDEQUE_T *vecdeque, const VECDEQUE_DTYPE *src, size_t len) {
-  VECDEQUE_FN(_grow)(vecdeque, vecdeque->len + len);
+VecDequeError
+VECDEQUE_FN(_push_backv)(VECDEQUE_T *vecdeque, const VECDEQUE_DTYPE *src, size_t len) {
+  VecDequeError e = VECDEQUE_FN(_grow)(vecdeque, vecdeque->len + len);
+  if (e) {
+    return e;
+  }
+
   for (size_t i = 0; i < len; i++) {
     vecdeque->pData[(vecdeque->head + vecdeque->len + i) % vecdeque->cap] = src[i];
   }
   vecdeque->len += len;
+  return VECDEQUE_ERR_OK;
 }
 
-void VECDEQUE_FN(_push_back)(VECDEQUE_T *vecdeque, const VECDEQUE_DTYPE *src) {
-  VECDEQUE_FN(_push_backv)(vecdeque, src, 1);
+VecDequeError VECDEQUE_FN(_push_back)(VECDEQUE_T *vecdeque, const VECDEQUE_DTYPE *src) {
+  return VECDEQUE_FN(_push_backv)(vecdeque, src, 1);
 }
 
-void VECDEQUE_FN(_push_frontv)(VECDEQUE_T *vecdeque, const VECDEQUE_DTYPE *src, size_t len) {
-  VECDEQUE_FN(_grow)(vecdeque, vecdeque->len + len);
+VecDequeError
+VECDEQUE_FN(_push_frontv)(VECDEQUE_T *vecdeque, const VECDEQUE_DTYPE *src, size_t len) {
+  VecDequeError e = VECDEQUE_FN(_grow)(vecdeque, vecdeque->len + len);
+  if (e) {
+    return e;
+  }
   for (size_t i = 0; i < len; i++) {
-    vecdeque->pData[(vecdeque->head + vecdeque->cap - i-1) % vecdeque->cap] = src[i];
+    vecdeque->pData[(vecdeque->head + vecdeque->cap - i - 1) % vecdeque->cap] = src[i];
   }
   vecdeque->len += len;
-  vecdeque->head = (vecdeque->head + vecdeque->cap  - len) % vecdeque->cap;
+  vecdeque->head = (vecdeque->head + vecdeque->cap - len) % vecdeque->cap;
+  return VECDEQUE_ERR_OK;
 }
 
-void VECDEQUE_FN(_push_frontv_rev)(VECDEQUE_T *vecdeque, const VECDEQUE_DTYPE *src, size_t len) {
-  VECDEQUE_FN(_grow)(vecdeque, vecdeque->len + len);
+VecDequeError
+VECDEQUE_FN(_push_frontv_rev)(VECDEQUE_T *vecdeque, const VECDEQUE_DTYPE *src, size_t len) {
+  VecDequeError e = VECDEQUE_FN(_grow)(vecdeque, vecdeque->len + len);
+  if (e) {
+    return e;
+  }
   for (size_t i_r = 0; i_r < len; i_r++) {
-    size_t i = len-i_r-1;
-    vecdeque->pData[(vecdeque->head + vecdeque->cap - i-1) % vecdeque->cap] = src[i_r];
+    size_t i = len - i_r - 1;
+    vecdeque->pData[(vecdeque->head + vecdeque->cap - i - 1) % vecdeque->cap] = src[i_r];
   }
   vecdeque->len += len;
-  vecdeque->head = (vecdeque->head + vecdeque->cap  - len) % vecdeque->cap;
+  vecdeque->head = (vecdeque->head + vecdeque->cap - len) % vecdeque->cap;
+  return VECDEQUE_ERR_OK;
 }
 
-void VECDEQUE_FN(_push_front)(VECDEQUE_T *vecdeque, const VECDEQUE_DTYPE *src) {
-  VECDEQUE_FN(_push_frontv)(vecdeque, src, 1);
+VecDequeError VECDEQUE_FN(_push_front)(VECDEQUE_T *vecdeque, const VECDEQUE_DTYPE *src) {
+  return VECDEQUE_FN(_push_frontv)(vecdeque, src, 1);
 }
 
 void VECDEQUE_FN(_pop_backv)(VECDEQUE_T *vecdeque, VECDEQUE_DTYPE *dest, size_t len) {
   assert(vecdeque->len >= len);
   for (size_t i = 0; i < len; i++) {
-    dest[i] = vecdeque->pData[(vecdeque->head + vecdeque->len - i-1) % vecdeque->cap];
+    dest[i] = vecdeque->pData[(vecdeque->head + vecdeque->len - i - 1) % vecdeque->cap];
   }
   vecdeque->len -= len;
 }
@@ -120,7 +146,7 @@ void VECDEQUE_FN(_get)(const VECDEQUE_T *vecdeque, size_t i, VECDEQUE_DTYPE *des
 
 VECDEQUE_DTYPE *VECDEQUE_FN(_at)(const VECDEQUE_T *vecdeque, size_t i) {
   assert(i < vecdeque->len);
-  return &vecdeque->pData[(vecdeque->head+i)%vecdeque->cap];
+  return &vecdeque->pData[(vecdeque->head + i) % vecdeque->cap];
 }
 
 size_t VECDEQUE_FN(_len)(const VECDEQUE_T *vecdeque) {

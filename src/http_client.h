@@ -3,8 +3,7 @@
 
 #include <stdio.h>
 
-#include "instances/vec_uint8_t.h"
-#include "tlsconfig.h"
+#include "instances/vec_br_x509_trust_anchor.h"
 
 typedef enum {
   HTTP_CLIENT_ERR_OK = 0,
@@ -35,28 +34,38 @@ typedef enum {
 
   // header parsing issues
   HTTP_CLIENT_ERR_HEADER_MALFORMED,
-  HTTP_CLIENT_ERR_TRANSFER_METHOD_UNSUPPORTED,
+  HTTP_CLIENT_ERR_TRANSFER_ENCODING_UNSUPPORTED,
 
   // response parsing issues
   HTTP_CLIENT_ERR_RESPONSE_MALFORMED,
   HTTP_CLIENT_ERR_RESPONSE_TRUNCATED
 } HttpClientError;
 
+typedef enum {
+  HTTP_CALLBACK_ERR_OK = 0,
+  HTTP_CALLBACK_ERR_OUT_OF_MEMORY,
+  HTTP_CALLBACK_ERR_IO
+} HttpCallbackError;
+
 const char *httpstrerror(HttpClientError error);
 
-HttpClientError http_client_get_tomem(
+
+typedef enum {
+  HTTP_PROTOCOL_HTTP,
+  HTTP_PROTOCOL_HTTPS
+} HttpProtocol;
+
+HttpClientError http_client_get(
+  HttpProtocol protocol,
   const char *host,
   const char *port,
   const char *path,
-  TlsConfig *tls,
-  vec_uint8_t *mem
-);
-HttpClientError http_client_get_tofile(
-  const char *host,
-  const char *port,
-  const char *path,
-  TlsConfig *tls,
-  FILE *out
+  // https-specific
+  vec_br_x509_trust_anchor *anchors,
+  bool strict_ssl,
+  // callback
+  void *context,
+  HttpCallbackError (*callback)(void *context, const uint8_t *buf, size_t buflen)
 );
 
 #endif // client_h_INCLUDED
