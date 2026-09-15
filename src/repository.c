@@ -12,6 +12,7 @@
 #include "fileutils.h"
 #include "http_client.h"
 #include "instances/llrb_char_ptr_resolvedpackage.h"
+#include "instances/slice_vec_char_ptr.h"
 #include "instances/vec_br_x509_trust_anchor.h"
 #include "instances/vec_char_ptr.h"
 #include "instances/vec_uint8_t.h"
@@ -77,34 +78,17 @@ bool package_data(
   return true;
 }
 
-ErrVal resolve_package_paths_installed(
-  llrb_char_ptr_resolvedpackage *resolved_packages,
-  char *directory,
-  vec_char_ptr *packages,
-  bool none_is_all
-) {
-  vec_char_ptr installedrepo;
-  vec_char_ptr_init(&installedrepo);
-  defer vec_char_ptr_delete(&installedrepo);
-  vec_char_ptr_push(&installedrepo, &directory);
-  ErrVal err =
-    resolve_package_paths_repositories(resolved_packages, &installedrepo, packages, none_is_all);
-  if (err != ERR_OK) {
-    return err;
-  }
+typedef struct {
+  const char *repository;
+  bool failed;
+  vec_char_ptr entries;
+} Repository;
 
-  llrb_char_ptr_resolvedpackage_iter iter;
-  llrb_char_ptr_resolvedpackage_iter_begin(resolved_packages, &iter);
-  ResolvedPackage *rp;
-  while (llrb_char_ptr_resolvedpackage_iter_next_ref(&iter, NULL, &rp)) {
-    rp->package_path = joinpath(rp->repository, rp->entry);
-  }
-  return ERR_OK;
-}
-
-static ErrVal resolve_package_paths_repositories(
+// getting the newest package
+static ErrVal resolve_newest_packages(
   llrb_char_ptr_resolvedpackage *resolved_packages,
-  vec_char_ptr *repositories,
+  size_t n_repositories,
+  Repository repositories[],
   vec_char_ptr *packages,
   bool none_is_all
 ) {
@@ -117,29 +101,15 @@ static ErrVal resolve_package_paths_repositories(
   }
   bool insert_all = none_is_all && (n_packages == 0);
 
-  // fetch a list of the packages in the repositories
-  size_t n_repositories = vec_char_ptr_len(repositories);
-
   for (size_t r = 0; r < n_repositories; r++) {
-    char *repository = *vec_char_ptr_at(repositories, r);
-
-    vec_char_ptr entries;
-    vec_char_ptr_init(&entries);
-    defer vec_char_ptr_delete_and_freeowned(&entries);
-
-    if (listdir_portable(repository, &entries, NULL) != 0) {
-      LOG_ERROR_ARGS(
-        ERR_LEVEL_ERROR,
-        "resolve: unable to list files in %s: %s",
-        repository,
-        strerror(errno)
-      );
-      return ERR_NOSUCHFILE;
+    if (repositories[r].failed) {
+      continue;
     }
-
-    size_t n_entries = vec_char_ptr_len(&entries);
+    const char *repository = repositories[r].repository;
+    vec_char_ptr *entries = &repositories[r].entries;
+    size_t n_entries = vec_char_ptr_len(entries);
     for (size_t e = 0; e < n_entries; e++) {
-      char *entry = *vec_char_ptr_at(&entries, e);
+      char *entry = *vec_char_ptr_at(entries, e);
 
       char *entrypackagename;
       char *entryversion;
@@ -237,6 +207,52 @@ static ErrVal resolve_package_paths_repositories(
   return ERR_OK;
 }
 
+static ErrVal populate_file(Repository *r) {
+  if (listdir_portable(r->repository, &r->entries, NULL) != 0) {
+    LOG_ERROR_ARGS(
+      ERR_LEVEL_ERROR,
+      "resolve: unable to list files in %s: %s",
+      r->repository,
+      strerror(errno)
+    );
+    return ERR_NOSUCHFILE;
+  }
+  return ERR_OK;
+}
+
+static ErrVal populate_http
+
+
+ErrVal resolve_package_paths_installed(
+  llrb_char_ptr_resolvedpackage *resolved_packages,
+  char *directory,
+  vec_char_ptr *packages,
+  bool none_is_all
+) {
+  Repository installedrepo;
+  installedrepo.repository = directory;
+  installedrepo.failed= false;
+  vec_char_ptr_init(&installedrepo.entries);
+  defer vec_char_ptr_delete_and_freeowned(&installedrepo.entries);
+  ErrVal pfe = populate_file(&installedrepo);
+  if(pfe != 0) {
+    return pfe;
+  }
+
+  ErrVal rnpe = resolve_newest_packages(resolved_packages, 1, &installedrepo, packages, none_is_all);
+  if (rnpe != 0) {
+    return rnpe;
+  }
+
+  llrb_char_ptr_resolvedpackage_iter iter;
+  llrb_char_ptr_resolvedpackage_iter_begin(resolved_packages, &iter);
+  ResolvedPackage *rp;
+  while (llrb_char_ptr_resolvedpackage_iter_next_ref(&iter, NULL, &rp)) {
+    rp->package_path = joinpath(rp->repository, rp->entry);
+  }
+  return ERR_OK;
+}
+
 static HttpCallbackError tofile_callback(void *context, const uint8_t *buf, size_t buflen) {
   FILE *f = context;
   size_t written = fwrite(buf, 1, buflen, f);
@@ -301,11 +317,7 @@ ErrVal resolve_and_fetch_package_paths_repositories(
         LOG_ERROR_ARGS(ERR_LEVEL_DEBUG, "tls setup: successfully read certificate file %s", path);
         break;
       case READ_TRUST_ANCHOR_NOTFOUND:
-        LOG_ERROR_ARGS(
-          ERR_LEVEL_DEBUG,
-          "tls setup: did not find certificate file %s",
-          path
-        );
+        LOG_ERROR_ARGS(ERR_LEVEL_DEBUG, "tls setup: did not find certificate file %s", path);
         break;
       default:
         LOG_ERROR_ARGS(
@@ -318,8 +330,7 @@ ErrVal resolve_and_fetch_package_paths_repositories(
     }
   }
 
-  ErrVal v1 =
-    resolve_package_paths_repositories(resolved_packages, repositories, packages, none_is_all);
+  ErrVal v1 = resolve_newest_packages(resolved_packages, repositories, packages, none_is_all);
   if (v1 != ERR_OK) {
     return v1;
   }
