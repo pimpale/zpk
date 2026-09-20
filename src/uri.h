@@ -11,8 +11,8 @@ typedef struct {
     bool has_port;
     uint16_t port;
     slice_uint8_t path;
-}  Uri;
+}  uri_t;
 
-bool decode_uri(char* input, Uri* out);
+bool decode_uri(slice_uint8_t input, uri_t* out);
 
 #endif // uri_h_INCLUDED

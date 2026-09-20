@@ -196,19 +196,6 @@ static bool case_insensitive_buf_str_eq(const uint8_t *buf, size_t buflen, const
   return true;
 }
 
-static bool case_insensitive_str_str_eq(const char *s1, const char *s2) {
-  size_t len = strlen(s1);
-  if (len != strlen(s2)) {
-    return false;
-  }
-  for (size_t i = 0; i < len; i++) {
-    if (ascii_lower((uint8_t)s1[i]) != s2[i]) {
-      return false;
-    }
-  }
-  return true;
-}
-
 static HttpClientError
 http_client_parse_statusline(HttpResponseHeaders *headers, uint8_t *line, size_t linelen) {
   const char *v = "HTTP/1.1 ";
