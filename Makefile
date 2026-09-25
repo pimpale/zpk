@@ -25,7 +25,7 @@ CC := clang
 CFLAGS ?= $(INC_FLAGS) $(DEFINES) -std=c2y -fdefer-ts -flto -MMD -MP -O0 -g3 -Wall -Weverything -pedantic \
  -Wno-padded -Wno-switch-enum -Wno-declaration-after-statement -Wno-unsafe-buffer-usage \
  -Wno-implicit-void-ptr-cast -Wno-pre-c2y-compat -Wno-pre-c23-compat -Wno-pre-c11-compat \
- -Wno-switch-default -Wno-disabled-macro-expansion
+ -Wno-switch-default -Wno-disabled-macro-expansion -Wno-nrvo
 
 
 ifeq ($(PLATFORM),windows)

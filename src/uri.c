@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-static bool parse_hostname(slice_uint8_t input, size_t *pi, uri_t *out) {
+static bool parse_hostname(slice_uint8_t input, size_t *pi, uri_parse_t *out) {
   size_t oi = *pi;
   size_t i = oi;
 
@@ -34,7 +34,7 @@ LOOP:
   return true;
 }
 
-static bool parse_ipv6(slice_uint8_t input, size_t *pi, uri_t *out) {
+static bool parse_ipv6(slice_uint8_t input, size_t *pi, uri_parse_t *out) {
   size_t oi = *pi;
   size_t i = oi;
 
@@ -77,7 +77,7 @@ static bool parse_ipv6(slice_uint8_t input, size_t *pi, uri_t *out) {
   return false;
 }
 
-static bool parse_ipv4(slice_uint8_t input, size_t *pi, uri_t *out) {
+static bool parse_ipv4(slice_uint8_t input, size_t *pi, uri_parse_t *out) {
   // we're not yet going to do any checking about the internal structure.
   // just gonna digit and dot it
   size_t oi = *pi;
@@ -106,7 +106,7 @@ LOOP:
   return true;
 }
 
-static bool parse_host(slice_uint8_t input, size_t *i, uri_t *out) {
+static bool parse_host(slice_uint8_t input, size_t *i, uri_parse_t *out) {
   if (parse_ipv4(input, i, out)) {
     return true;
   }
@@ -119,7 +119,7 @@ static bool parse_host(slice_uint8_t input, size_t *i, uri_t *out) {
   return false;
 }
 
-static bool parse_port(slice_uint8_t input, size_t *pi, uri_t *out) {
+static bool parse_port(slice_uint8_t input, size_t *pi, uri_parse_t *out) {
   uint16_t *num = &out->port;
   *num = 0;
   size_t oi = *pi;
@@ -148,7 +148,7 @@ LOOP:
   return true;
 }
 
-static bool parse_authority(slice_uint8_t input, size_t *i, uri_t *out) {
+static bool parse_authority(slice_uint8_t input, size_t *i, uri_parse_t *out) {
   size_t oi = *i;
 
   // must begin with //
@@ -156,6 +156,7 @@ static bool parse_authority(slice_uint8_t input, size_t *i, uri_t *out) {
     *i = oi;
     return false;
   }
+  *i+=2;
 
   if (!parse_host(input, i, out)) {
     *i = oi;
@@ -173,7 +174,7 @@ static bool parse_authority(slice_uint8_t input, size_t *i, uri_t *out) {
   return true;
 }
 
-static bool parse_scheme(slice_uint8_t input, size_t *pi, uri_t *out) {
+static bool parse_scheme(slice_uint8_t input, size_t *pi, uri_parse_t *out) {
   size_t oi = *pi;
   size_t i = oi;
 
@@ -199,7 +200,7 @@ LOOP:
 }
 
 // rest of the thing till we hit a space or newline idk
-static bool parse_path(slice_uint8_t input, size_t *pi, uri_t *out) {
+static bool parse_path(slice_uint8_t input, size_t *pi, uri_parse_t *out) {
   size_t oi = *pi;
   size_t i = oi;
 
@@ -224,7 +225,7 @@ LOOP:
   return true;
 }
 
-static bool parse_uri(slice_uint8_t input, size_t *i, uri_t *out) {
+static bool parse_uri(slice_uint8_t input, size_t *i, uri_parse_t *out) {
   size_t oi = *i;
   if (!parse_scheme(input, i, out)) {
     *i = oi;
@@ -236,6 +237,7 @@ static bool parse_uri(slice_uint8_t input, size_t *i, uri_t *out) {
     *i = oi;
     return false;
   }
+  *i+=1;
 
   // must have authority
   if (!parse_authority(input, i, out)) {
@@ -251,8 +253,8 @@ static bool parse_uri(slice_uint8_t input, size_t *i, uri_t *out) {
   return true;
 }
 
-bool decode_uri(slice_uint8_t input, uri_t *out) {
-  *out = (uri_t){0};
+bool decode_uri(slice_uint8_t input, uri_parse_t *out) {
+  *out = (uri_parse_t){0};
   size_t i = 0;
   return parse_uri(input, &i, out);
 }

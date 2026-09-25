@@ -1,11 +1,16 @@
 #include "configuration.h"
 
 #include "error.h"
+#include "instances/slice_uint8_t.h"
+#include "instances/vec_slice_uint8_t.h"
 #include "oscompatlayer.h"
 #include "pathutils.h"
+#include "uri.h"
 #include <asprintf/asprintf.h>
 
 #include <errno.h>
+#include <stddefer.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -15,33 +20,101 @@
 #define USER_CONFIG_PATH "~/.zpk.ini"
 #define CONFIGURATION_FILE_NAME ".zpk.ini"
 
-// allocates
-static char *resolve_config_relative(const char *config_path, const char *raw) {
-  if (strstr(raw, "://") != NULL) {
-    return strdup(raw);
+// duplicate slice or fail
+static slice_uint8_t slicedup(slice_uint8_t in) {
+  slice_uint8_t out;
+  if (slice_uint8_t_dup(&in, &out) != 0) {
+    LOG_ERROR(ERR_LEVEL_FATAL, "out of memory");
+    PANIC();
   }
+  return out;
+}
 
-  char *expanded = expandtilde(raw);
-  if (expanded[0] == '/') {
-    return expanded;
-  }
-
+// returns the dir of the file by stripping the last one
+static slice_uint8_t getconfig_dir(char *config_path) {
   const char *last_slash = strrchr(config_path, '/');
   if (last_slash == NULL) {
-    // config_path was a bare filename (e.g. "zpk.ini")
-    return expanded;
+    return slice_uint8_t_from_str(getcwd_portable());
+  } else {
+    return (
+      slice_uint8_t
+    ){.data = (uint8_t *)config_path, .len = (size_t)(last_slash - config_path)};
+  }
+}
+
+// allocates a new string with the tilde expanded to the user's home directory,
+// if applicable. only expands tilde at the start of the string, and only if
+// followed by a slash or end of string. errors are fatal
+static bool can_expandtilde_slice(slice_uint8_t slice) {
+  bool expand = false;
+  switch (slice.len) {
+    case 0:
+      LOG_ERROR(ERR_LEVEL_FATAL, "could not expand tilde: bad input path: empty string");
+      PANIC();
+    case 1:
+      if (slice.data[0] == '~') {
+        expand = true;
+      }
+      break;
+    default:
+      if (slice.data[0] == '~' && slice.data[1] == '/') {
+        expand = true;
+      }
+      break;
+  }
+  return expand;
+}
+
+// allocates
+static slice_uint8_t
+resolve_path(slice_uint8_t config_dir, slice_uint8_t input, bool expand_tilde, slice_uint8_t home) {
+  char *unnormalized;
+  if (expand_tilde && can_expandtilde_slice(input)) {
+    unnormalized =
+      joinpath_slice_str(home, (slice_uint8_t){.data = input.data + 1, .len = input.len - 1});
+  } else if (path_is_absolute_portable((char *)input.data, input.len)) {
+    unnormalized = slice_uint8_t_to_allocated_str(input);
+  } else {
+    unnormalized = joinpath_slice_str(config_dir, input);
   }
 
-  size_t dir_len = (size_t)(last_slash - config_path);
-  char *resolved;
-  asprintf(&resolved, "%.*s/%s", (int)dir_len, config_path, expanded);
-  free(expanded);
-  return resolved;
+  char *out = abspath_portable(unnormalized);
+
+  free(unnormalized);
+  return slice_uint8_t_from_str(out);
+}
+
+// allocates
+static slice_uint8_t resolve_path_uri(
+  slice_uint8_t config_dir,
+  slice_uint8_t input,
+  bool expand_tilde,
+  slice_uint8_t home
+) {
+  // try to parse uri
+  uri_parse_t parsed;
+  if (!decode_uri(input, &parsed)) {
+    LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "%.*s: failed to parse URI", (int)input.len, input.data);
+    PANIC();
+  }
+
+  if (!slice_uint8_t_eq(parsed.scheme, slice_uint8_t_from_str("file"))) {
+    return slicedup(input);
+  }
+  parsed.path = resolve_path(config_dir, parsed.path, expand_tilde, home);
+
+  slice_uint8_t output;
+  if (!encode_uri(&output, parsed)) {
+    LOG_ERROR(ERR_LEVEL_FATAL, "failed to resolve relative URI: ran out of memory");
+    PANIC();
+  }
+  free(parsed.path.data);
+  return output;
 }
 
 // rules are sysroot-relative
 static void push_protected_path(
-  vec_char_ptr *out,
+  vec_slice_uint8_t *out,
   const char *config_path,
   const char *key,
   const TomlValue *elem
@@ -63,12 +136,23 @@ static void push_protected_path(
     PANIC();
   }
   char_ptr copy = strdup(rule);
-  vec_char_ptr_push(out, &copy);
+  if (copy == NULL) {
+    LOG_ERROR(ERR_LEVEL_FATAL, "failed to allocate memory for protected path");
+    PANIC();
+  }
+  slice_uint8_t slice = slice_uint8_t_from_str(copy);
+  vec_slice_uint8_t_push(out, &slice);
 }
 
-static void
-maybe_apply_config_file(ZpkConfiguration *config, const char *path, bool cli_specified) {
+static void maybe_apply_config_file(
+  ZpkConfiguration *config,
+  char *path,
+  bool cli_specified,
+  slice_uint8_t home
+) {
   FILE *maybe_file = fopen(path, "r");
+  slice_uint8_t config_dir = getconfig_dir(path);
+
   if (maybe_file == NULL) {
     if (cli_specified) {
       LOG_ERROR_ARGS(
@@ -104,9 +188,16 @@ maybe_apply_config_file(ZpkConfiguration *config, const char *path, bool cli_spe
       LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "%s: sysroot must be a string", path);
       PANIC();
     }
-    free(config->sysroot);
-    config->sysroot = resolve_config_relative(path, val->value.string->str);
-    LOG_ERROR_ARGS(ERR_LEVEL_DEBUG, "%s: sysroot set to %s", path, config->sysroot);
+    free(config->sysroot.data);
+    config->sysroot =
+      resolve_path(config_dir, slice_uint8_t_from_str(val->value.string->str), true, home);
+    LOG_ERROR_ARGS(
+      ERR_LEVEL_DEBUG,
+      "%s: sysroot set to %.*s",
+      path,
+      (int)config->sysroot.len,
+      config->sysroot.data
+    );
   }
 
   val = toml_table_get(table, "installed-pkgs-path");
@@ -115,13 +206,15 @@ maybe_apply_config_file(ZpkConfiguration *config, const char *path, bool cli_spe
       LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "%s: installed-pkgs-path must be a string", path);
       PANIC();
     }
-    free(config->installed_pkgs_path);
-    config->installed_pkgs_path = resolve_config_relative(path, val->value.string->str);
+    free(config->installed_pkgs_path.data);
+    config->installed_pkgs_path =
+      resolve_path(config_dir, slice_uint8_t_from_str(val->value.string->str), true, home);
     LOG_ERROR_ARGS(
       ERR_LEVEL_DEBUG,
-      "%s: installed-pkgs-path set to %s",
+      "%s: installed-pkgs-path set to %.*s",
       path,
-      config->installed_pkgs_path
+      (int)config->installed_pkgs_path.len,
+      config->installed_pkgs_path.data
     );
   }
 
@@ -131,13 +224,15 @@ maybe_apply_config_file(ZpkConfiguration *config, const char *path, bool cli_spe
       LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "%s: cached-pkgs-path must be a string", path);
       PANIC();
     }
-    free(config->cached_pkgs_path);
-    config->cached_pkgs_path = resolve_config_relative(path, val->value.string->str);
+    free(config->cached_pkgs_path.data);
+    config->cached_pkgs_path =
+      resolve_path(config_dir, slice_uint8_t_from_str(val->value.string->str), true, home);
     LOG_ERROR_ARGS(
       ERR_LEVEL_DEBUG,
-      "%s: cached-pkgs-path set to %s",
+      "%s: cached-pkgs-path set to %.*s",
       path,
-      config->cached_pkgs_path
+      (int)config->cached_pkgs_path.len,
+      config->cached_pkgs_path.data
     );
   }
 
@@ -150,16 +245,23 @@ maybe_apply_config_file(ZpkConfiguration *config, const char *path, bool cli_spe
     // repositories (and not extra repositories) means that we replace any
     // existing repositories with the ones in the config file:
     LOG_ERROR_ARGS(ERR_LEVEL_DEBUG, "%s: repositories vector reset", path);
-    vec_char_ptr_clear_and_freeowned(&config->repositories);
+    vec_slice_uint8_t_clear_and_freeowned(&config->repositories);
     for (size_t i = 0; i < val->value.array->len; i++) {
       TomlValue *elem = val->value.array->elements[i];
       if (elem->type != TOML_STRING) {
         LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "%s: repositories must be strings", path);
         PANIC();
       }
-      char_ptr repo = resolve_config_relative(path, elem->value.string->str);
-      vec_char_ptr_push(&config->repositories, &repo);
-      LOG_ERROR_ARGS(ERR_LEVEL_DEBUG, "%s: repositories vector: added %s", path, repo);
+      slice_uint8_t repo =
+        resolve_path_uri(config_dir, slice_uint8_t_from_str(elem->value.string->str), true, home);
+      vec_slice_uint8_t_push(&config->repositories, &repo);
+      LOG_ERROR_ARGS(
+        ERR_LEVEL_DEBUG,
+        "%s: repositories vector: added %.*s",
+        path,
+        (int)repo.len,
+        repo.data
+      );
     }
   }
 
@@ -177,9 +279,16 @@ maybe_apply_config_file(ZpkConfiguration *config, const char *path, bool cli_spe
         LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "%s: extra-repositories must be strings", path);
         PANIC();
       }
-      char_ptr repo = resolve_config_relative(path, elem->value.string->str);
-      vec_char_ptr_push(&config->repositories, &repo);
-      LOG_ERROR_ARGS(ERR_LEVEL_DEBUG, "%s: repositories vector: added %s", path, repo);
+      slice_uint8_t repo =
+        resolve_path_uri(config_dir, slice_uint8_t_from_str(elem->value.string->str), true, home);
+      vec_slice_uint8_t_push(&config->repositories, &repo);
+      LOG_ERROR_ARGS(
+        ERR_LEVEL_DEBUG,
+        "%s: repositories vector: added %.*s",
+        path,
+        (int)repo.len,
+        repo.data
+      );
     }
   }
 
@@ -191,7 +300,7 @@ maybe_apply_config_file(ZpkConfiguration *config, const char *path, bool cli_spe
     }
     // protected-paths (and not extra-protected-paths) replaces any rules
     // from lower-precedence config files
-    vec_char_ptr_clear_and_freeowned(&config->protected_paths);
+    vec_slice_uint8_t_clear_and_freeowned(&config->protected_paths);
     for (size_t i = 0; i < val->value.array->len; i++) {
       push_protected_path(
         &config->protected_paths,
@@ -224,15 +333,23 @@ maybe_apply_config_file(ZpkConfiguration *config, const char *path, bool cli_spe
       LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "%s: cacert-paths must be an array", path);
       PANIC();
     }
-    vec_char_ptr_clear_and_freeowned(&config->cacert_paths);
+    vec_slice_uint8_t_clear_and_freeowned(&config->cacert_paths);
     for (size_t i = 0; i < val->value.array->len; i++) {
       TomlValue *elem = val->value.array->elements[i];
       if (elem->type != TOML_STRING) {
         LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "%s: cacert-paths must be strings", path);
         PANIC();
       }
-      char_ptr cacert = resolve_config_relative(path, elem->value.string->str);
-      vec_char_ptr_push(&config->cacert_paths, &cacert);
+      slice_uint8_t cacert_path =
+        resolve_path(config_dir, slice_uint8_t_from_str(elem->value.string->str), true, home);
+      vec_slice_uint8_t_push(&config->cacert_paths, &cacert_path);
+      LOG_ERROR_ARGS(
+        ERR_LEVEL_DEBUG,
+        "%s: cacert-paths vector: added %.*s",
+        path,
+        (int)cacert_path.len,
+        cacert_path.data
+      );
     }
   }
 
@@ -248,8 +365,16 @@ maybe_apply_config_file(ZpkConfiguration *config, const char *path, bool cli_spe
         LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "%s: extra-cacert-paths must be strings", path);
         PANIC();
       }
-      char_ptr cacert = resolve_config_relative(path, elem->value.string->str);
-      vec_char_ptr_push(&config->cacert_paths, &cacert);
+      slice_uint8_t cacert_path =
+        resolve_path(config_dir, slice_uint8_t_from_str(elem->value.string->str), true, home);
+      vec_slice_uint8_t_push(&config->cacert_paths, &cacert_path);
+      LOG_ERROR_ARGS(
+        ERR_LEVEL_DEBUG,
+        "%s: cacert-paths vector: added %.*s",
+        path,
+        (int)cacert_path.len,
+        cacert_path.data
+      );
     }
   }
 
@@ -258,89 +383,100 @@ maybe_apply_config_file(ZpkConfiguration *config, const char *path, bool cli_spe
 
 // splits a comma-separated environment value and appends each entry to `out`.
 // expand tildes
-static void push_env_pathlist(vec_char_ptr *out, const char *env, const char *delim) {
+
+static void push_env_pathlist(
+  vec_slice_uint8_t *out,
+  const char *env,
+  const char *delim,
+  slice_uint8_t cwd,
+  slice_uint8_t home,
+  bool uri
+) {
   char *dup = strdup(env);
   for (char *tok = strtok(dup, delim); tok != NULL; tok = strtok(NULL, delim)) {
     if (*tok == '\0') {
       continue;
     }
-    char_ptr repo = expandtilde(tok);
-    vec_char_ptr_push(out, &repo);
+    slice_uint8_t expanded = uri ? resolve_path_uri(cwd, slice_uint8_t_from_str(tok), true, home)
+                                 : resolve_path(cwd, slice_uint8_t_from_str(tok), true, home);
+    vec_slice_uint8_t_push(out, &expanded);
   }
   free(dup);
 }
 
-static void apply_env_config(ZpkConfiguration *config) {
-  const char *env = getenv("ZPK_SYSROOT");
+static void apply_env_config(ZpkConfiguration *config, slice_uint8_t cwd, slice_uint8_t home) {
+  char *env = getenv("ZPK_SYSROOT");
   if (env != NULL) {
-    free(config->sysroot);
-    config->sysroot = expandtilde(env);
+    free(config->sysroot.data);
+    config->sysroot = resolve_path(cwd, slice_uint8_t_from_str(env), true, home);
   }
 
   env = getenv("ZPK_INSTALLED_PKGS_PATH");
   if (env != NULL) {
-    free(config->installed_pkgs_path);
-    config->installed_pkgs_path = expandtilde(env);
+    free(config->installed_pkgs_path.data);
+    config->installed_pkgs_path = resolve_path(cwd, slice_uint8_t_from_str(env), true, home);
   }
 
   env = getenv("ZPK_CACHED_PKGS_PATH");
   if (env != NULL) {
-    free(config->cached_pkgs_path);
-    config->cached_pkgs_path = expandtilde(env);
+    free(config->cached_pkgs_path.data);
+    config->cached_pkgs_path = resolve_path(cwd, slice_uint8_t_from_str(env), true, home);
   }
 
   env = getenv("ZPK_REPOSITORIES");
   if (env != NULL) {
-    vec_char_ptr_clear_and_freeowned(&config->repositories);
-    push_env_pathlist(&config->repositories, env, ",");
+    vec_slice_uint8_t_clear_and_freeowned(&config->repositories);
+    push_env_pathlist(&config->repositories, env, ",", cwd, home, true);
   }
 
   env = getenv("ZPK_EXTRA_REPOSITORIES");
   if (env != NULL) {
-    push_env_pathlist(&config->repositories, env, ",");
+    push_env_pathlist(&config->repositories, env, ",", cwd, home, true);
   }
 
   env = getenv("ZPK_CACERT_PATHS");
   if (env != NULL) {
-    vec_char_ptr_clear_and_freeowned(&config->cacert_paths);
-    push_env_pathlist(&config->cacert_paths, env, ",");
+    vec_slice_uint8_t_clear_and_freeowned(&config->cacert_paths);
+    push_env_pathlist(&config->cacert_paths, env, ",", cwd, home, false);
   }
 
   env = getenv("ZPK_EXTRA_CACERT_PATHS");
   if (env != NULL) {
-    push_env_pathlist(&config->cacert_paths, env, ",");
+    push_env_pathlist(&config->cacert_paths, env, ",", cwd, home, false);
   }
 }
 
 static void resolve_configuration(
   ZpkConfiguration *config,
-  const char *cli_config,
-  const char *cli_sysroot,
-  const bool *cli_check_certificate,
-  const bool *cli_simulate,
-  vec_char_ptr *cli_extra_repositories
+  slice_uint8_t cwd,
+  slice_uint8_t home,
+  char *cli_config,
+  char *cli_sysroot,
+  bool *cli_check_certificate,
+  bool *cli_simulate,
+  vec_slice_uint8_t *cli_extra_repositories
 ) {
-  config->sysroot = NULL;
-  config->installed_pkgs_path = NULL;
-  config->cached_pkgs_path = NULL;
+  config->sysroot = (slice_uint8_t){.data = NULL, .len = 0};
+  config->installed_pkgs_path = (slice_uint8_t){.data = NULL, .len = 0};
+  config->cached_pkgs_path = (slice_uint8_t){.data = NULL, .len = 0};
   config->strict_ssl = true;
   config->download_only = false;
-  vec_char_ptr_init(&config->repositories);
-  vec_char_ptr_init(&config->protected_paths);
-  vec_char_ptr_init(&config->cacert_paths);
+  vec_slice_uint8_t_init(&config->repositories);
+  vec_slice_uint8_t_init(&config->protected_paths);
+  vec_slice_uint8_t_init(&config->cacert_paths);
 
   // we check in reverse order of precedence, so that later sources override
   // earlier ones.
 
   // 6. system config file
   if (!cli_config) {
-    maybe_apply_config_file(config, SYSTEM_CONFIG_PATH, false);
+    maybe_apply_config_file(config, SYSTEM_CONFIG_PATH, false, home);
   }
 
   // 5. user config file
   if (!cli_config) {
     char *user_config_path_expanded = expandtilde(USER_CONFIG_PATH);
-    maybe_apply_config_file(config, user_config_path_expanded, false);
+    maybe_apply_config_file(config, user_config_path_expanded, false, home);
     free(user_config_path_expanded);
   }
 
@@ -349,43 +485,36 @@ static void resolve_configuration(
   // down to the current directory, so that the current directory's config
   // overrides any parent directories.
   if (!cli_config) {
-    char *cwd = getcwd_portable();
-    size_t cwd_len = strlen(cwd);
-    for (size_t i = 0; i <= cwd_len; i++) {
-      bool at_end = i == cwd_len;
-      if (!at_end && cwd[i] != '/') {
+    for (size_t i = 0; i <= cwd.len; i++) {
+      bool at_end = i == cwd.len;
+      if (!at_end && cwd.data[i] != '/') {
         continue;
       }
       // a cwd of "/" is already covered by the i == 0 prefix
-      if (at_end && cwd_len > 0 && cwd[cwd_len - 1] == '/') {
+      if (at_end && cwd.len > 0 && cwd.data[cwd.len - 1] == '/') {
         break;
       }
-      cwd[i] = '\0';
       char *config_path;
-      asprintf(&config_path, "%s/%s", cwd, CONFIGURATION_FILE_NAME);
-      maybe_apply_config_file(config, config_path, false);
+      asprintf(&config_path, "%.*s/%s", (int)(i), cwd.data, CONFIGURATION_FILE_NAME);
+      maybe_apply_config_file(config, config_path, false, home);
       free(config_path);
-      if (!at_end) {
-        cwd[i] = '/';
-      }
     }
-    free(cwd);
   }
 
   // 3. cli specified config file
   // no need to expand tilde, because the shell should have done that for us
   // when it passed the path to us.
   if (cli_config != NULL) {
-    maybe_apply_config_file(config, cli_config, true);
+    maybe_apply_config_file(config, cli_config, true, home);
   }
 
   // 2. environment variables
-  apply_env_config(config);
+  apply_env_config(config, cwd, home);
 
   // 1. cli specified sysroot + repositories
   if (cli_sysroot != NULL) {
-    free(config->sysroot);
-    config->sysroot = strdup(cli_sysroot);
+    free(config->sysroot.data);
+    config->sysroot = resolve_path(cwd, slice_uint8_t_from_str(cli_sysroot), false, home);
   }
 
   if (cli_check_certificate != NULL) {
@@ -395,59 +524,38 @@ static void resolve_configuration(
     config->download_only = *cli_simulate;
   }
 
-  if (config->sysroot == NULL) {
-    config->sysroot = strdup("/");
+  if (config->sysroot.data == NULL) {
+    config->sysroot = resolve_path(cwd, slice_uint8_t_from_str("/"), false, home);
   }
 
-  if (config->installed_pkgs_path == NULL) {
-    size_t sysroot_len = strlen(config->sysroot);
-    bool trailing_slash = sysroot_len > 0 && config->sysroot[sysroot_len - 1] == '/';
-    asprintf(&config->installed_pkgs_path, trailing_slash ? "%spkg" : "%s/pkg", config->sysroot);
+  if (config->installed_pkgs_path.data == NULL) {
+    config->installed_pkgs_path = joinpath_slice(config->sysroot, slice_uint8_t_from_str("pkg"));
   }
 
-  if (config->cached_pkgs_path == NULL) {
-    size_t sysroot_len = strlen(config->sysroot);
-    bool trailing_slash = sysroot_len > 0 && config->sysroot[sysroot_len - 1] == '/';
-    asprintf(
-      &config->cached_pkgs_path,
-      trailing_slash ? "%spkgcache" : "%s/pkgcache",
-      config->sysroot
-    );
+  if (config->cached_pkgs_path.data == NULL) {
+    config->cached_pkgs_path = joinpath_slice(config->sysroot, slice_uint8_t_from_str("pkgcache"));
   }
-
-  char *resolved = abspath_portable(config->sysroot);
-  free(config->sysroot);
-  config->sysroot = resolved;
-  resolved = abspath_portable(config->installed_pkgs_path);
-  free(config->installed_pkgs_path);
-  config->installed_pkgs_path = resolved;
-  resolved = abspath_portable(config->cached_pkgs_path);
-  free(config->cached_pkgs_path);
-  config->cached_pkgs_path = resolved;
 
   if (cli_extra_repositories != NULL) {
     // -X/--repository appends (like in apk)
-    for (uint32_t i = 0; i < vec_char_ptr_len(cli_extra_repositories); i++) {
-      char_ptr repo = strdup(*vec_char_ptr_at(cli_extra_repositories, i));
-      vec_char_ptr_push(&config->repositories, &repo);
+    for (uint32_t i = 0; i < vec_slice_uint8_t_len(cli_extra_repositories); i++) {
+      slice_uint8_t tmp =
+        resolve_path_uri(cwd, *vec_slice_uint8_t_at(cli_extra_repositories, i), false, home);
+      if (vec_slice_uint8_t_push(&config->repositories, &tmp) != 0) {
+        LOG_ERROR(ERR_LEVEL_FATAL, "ran out of memory adding repositories");
+        PANIC();
+      }
     }
-  }
-
-  if (!config->strict_ssl) {
-    LOG_ERROR(
-      ERR_LEVEL_WARN,
-      "certificate validation is disabled; downloads are not protected against tampering"
-    );
   }
 }
 
 void delete_zpkconfiguration(ZpkConfiguration *config) {
-  free(config->sysroot);
-  free(config->installed_pkgs_path);
-  free(config->cached_pkgs_path);
-  vec_char_ptr_delete_and_freeowned(&config->repositories);
-  vec_char_ptr_delete_and_freeowned(&config->protected_paths);
-  vec_char_ptr_delete_and_freeowned(&config->cacert_paths);
+  free(config->sysroot.data);
+  free(config->installed_pkgs_path.data);
+  free(config->cached_pkgs_path.data);
+  vec_slice_uint8_t_delete_and_freeowned(&config->repositories);
+  vec_slice_uint8_t_delete_and_freeowned(&config->protected_paths);
+  vec_slice_uint8_t_delete_and_freeowned(&config->cacert_paths);
 }
 
 static const char *USAGE =
@@ -507,10 +615,9 @@ static char *opt_value(int argc, char **argv, int *i) {
 
 // matches an option written either `--opt VALUE` or `--opt=VALUE`; returns NULL
 // if arg names some other option
-static const char *
-match_value_flag(int argc, char **argv, int *i, const char *shortopt, const char *longopt) {
-  const char *arg = argv[*i];
-  const char *names[2] = {shortopt, longopt};
+static char *match_value_flag(int argc, char **argv, int *i, char *shortopt, char *longopt) {
+  char *arg = argv[*i];
+  char *names[2] = {shortopt, longopt};
   for (size_t n = 0; n < 2; n++) {
     if (names[n] == NULL) {
       continue;
@@ -589,9 +696,9 @@ static ZpkOpKind lookup_command(const char *name) {
 }
 
 void parse_args(int argc, char **argv, ZpkConfiguration *config, ZpkOperation *op) {
-  const char *cli_sysroot = NULL;
-  const char *cli_config = NULL;
-  const char *fetch_output = NULL;
+  char *cli_sysroot = NULL;
+  char *cli_config = NULL;
+  char *fetch_output = NULL;
   bool list_installed = false;
   bool list_upgradable = false;
   bool list_available = false;
@@ -606,15 +713,20 @@ void parse_args(int argc, char **argv, ZpkConfiguration *config, ZpkOperation *o
   int verbosity = 0;
   ZpkOpKind kind = ZPK_OP_ADD; // overwritten when the command is seen
 
-  vec_char_ptr cli_extra_repositories;
-  vec_char_ptr_init(&cli_extra_repositories);
+  vec_slice_uint8_t cli_extra_repositories;
+  // contents are not owned
+  vec_slice_uint8_t_init(&cli_extra_repositories);
   vec_char_ptr targets;
   vec_char_ptr_init(&targets);
+
+  // get cwd
+  char *cwd = getcwd_portable();
+  char *home = getenv_home_portable();
 
   for (int i = 1; i < argc; i++) {
     char *arg = argv[i];
     int nverbose = count_verbose_flag(arg);
-    const char *val = NULL;
+    char *val = NULL;
 
     if (no_more_options || arg[0] != '-' || arg[1] == '\0') {
       if (!have_op) {
@@ -635,8 +747,8 @@ void parse_args(int argc, char **argv, ZpkConfiguration *config, ZpkOperation *o
     } else if ((val = match_value_flag(argc, argv, &i, "-p", "--root")) != NULL) {
       cli_sysroot = val;
     } else if ((val = match_value_flag(argc, argv, &i, "-X", "--repository")) != NULL) {
-      char_ptr repo = strdup(val);
-      vec_char_ptr_push(&cli_extra_repositories, &repo);
+      slice_uint8_t repo = slice_uint8_t_from_str(val);
+      vec_slice_uint8_t_push(&cli_extra_repositories, &repo);
     } else if ((val = match_value_flag(argc, argv, &i, NULL, "--config")) != NULL) {
       cli_config = val;
     } else if (match_bool_flag(arg, "-s", "--simulate", &cli_simulate)) {
@@ -716,13 +828,17 @@ void parse_args(int argc, char **argv, ZpkConfiguration *config, ZpkOperation *o
   // resolve_configuration copies the -X strings, so we still own these
   resolve_configuration(
     config,
+    slice_uint8_t_from_str(cwd),
+    slice_uint8_t_from_str(home),
     cli_config,
     cli_sysroot,
     have_check_certificate ? &cli_check_certificate : NULL,
     have_simulate ? &cli_simulate : NULL,
     &cli_extra_repositories
   );
-  vec_char_ptr_delete_and_freeowned(&cli_extra_repositories);
+  vec_slice_uint8_t_delete(&cli_extra_repositories);
+  free(cwd);
+  free(home);
 
   op->op = kind;
   switch (kind) {

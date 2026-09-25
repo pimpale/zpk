@@ -1,3 +1,4 @@
+#include "instances/slice_uint8_t.h"
 #ifndef SLICE_DTYPE
 #error "SLICE_DTYPE must be defined before including slice_impl.h"
 #endif
@@ -35,6 +36,14 @@ SliceError SLICE_FN(_dup)(SLICE_T *slice, SLICE_T *out) {
   }
   memcpy(out->data, slice->data, slice->len * sizeof(SLICE_DTYPE));
   return SLICE_ERR_OK;
+}
+
+// compare for byte equality
+bool SLICE_FN(_eq(SLICE_T a, SLICE_T b)) {
+  if(a.len != b.len) {
+    return false;
+  }
+  return memcmp(a.data, b.data, a.len *sizeof(SLICE_DTYPE)) == 0;
 }
 
 #undef SLICE_T

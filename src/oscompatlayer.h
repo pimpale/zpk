@@ -24,6 +24,7 @@ int mkdir_portable(const char *path, int mode);
 int rmdir_portable(const char *path);
 int rename_portable(const char *oldpath, const char *newpath);
 char *abspath_portable(const char *path);
+bool path_is_absolute_portable(const char *p, size_t n);
 int listdir_portable(const char *path, vec_char_ptr *out_files, vec_char_ptr *out_dirs);
 // Opens in binary read or write mode without preventing a rename while open.
 // Only "rb" and "wb" are supported; other modes fail with EINVAL.

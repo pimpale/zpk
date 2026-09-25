@@ -27,6 +27,7 @@
 
 #include "read_trust_anchor.h"
 #include "fileutils.h"
+#include "instances/slice_uint8_t.h"
 #include "instances/vec_br_x509_trust_anchor.h"
 #include "instances/vec_uint8_t.h"
 #include <bearssl/inc/bearssl_pem.h>
@@ -222,7 +223,7 @@ decode_pem(vec_br_x509_trust_anchor *anchors, const uint8_t *buf, size_t len) {
                                        : READ_TRUST_ANCHOR_ERR_OK;
 }
 
-ReadTrustAnchorError read_trust_anchors(vec_br_x509_trust_anchor *anchors, const char *path) {
+ReadTrustAnchorError read_trust_anchors(vec_br_x509_trust_anchor *anchors, slice_uint8_t path) {
   vec_uint8_t file;
   if (vec_uint8_t_init(&file) != 0) {
     return READ_TRUST_ANCHOR_ERR_OUT_OF_MEMORY;

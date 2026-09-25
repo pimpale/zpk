@@ -4,6 +4,7 @@
 #include "error.h"
 #include "instances/llrb_char_ptr_resolvedpackage.h"
 #include "instances/vec_char_ptr.h"
+#include "instances/vec_slice_uint8_t.h"
 
 
 bool package_data(
@@ -27,12 +28,12 @@ ErrVal resolve_package_paths_installed(
 
 ErrVal resolve_and_fetch_package_paths_repositories(
     llrb_char_ptr_resolvedpackage *resolved_packages,
-    vec_char_ptr *repositories,
+    vec_slice_uint8_t *repositories,
     vec_char_ptr *packages,
     const char *cache_directory,
     bool none_is_all,
     bool download,
-    vec_char_ptr *cacert_paths,
+    vec_slice_uint8_t *cacert_paths,
     bool strict_ssl
 );
 

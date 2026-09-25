@@ -163,6 +163,24 @@ char *abspath_portable(const char *path) {
   return full;
 }
 
+static bool is_sep(char c) {
+    return c == '/' || c == '\\';
+}
+
+bool path_is_absolute_portable(const char *p, size_t n) {
+    // UNC and namespace prefixes.
+    if (n >= 2 && is_sep(p[0]) && is_sep(p[1])) {
+        return true;
+    }
+
+    // Drive letter followed by colon and root separator.
+    return n >= 3
+        && ((p[0] >= 'A' && p[0] <= 'Z')
+            || (p[0] >= 'a' && p[0] <= 'z'))
+        && p[1] == ':'
+        && is_sep(p[2]);
+}
+
 FILE *fopen_nolock_portable(const char *restrict filename, const char *restrict modes) {
   if (filename == NULL || modes == NULL) {
     errno = EINVAL;

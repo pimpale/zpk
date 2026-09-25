@@ -211,6 +211,10 @@ char *abspath_portable(const char *path) {
   return cleaned;
 }
 
+bool path_is_absolute_portable(const char *p, size_t n) {
+    return n > 0 && p[0] == '/';
+}
+
 FILE *fopen_nolock_portable(const char *restrict filename, const char *restrict modes) {
   if (filename == NULL || modes == NULL
       || (strcmp(modes, "rb") != 0 && strcmp(modes, "wb") != 0)) {

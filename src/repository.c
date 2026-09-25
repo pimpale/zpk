@@ -12,9 +12,9 @@
 #include "fileutils.h"
 #include "http_client.h"
 #include "instances/llrb_char_ptr_resolvedpackage.h"
-#include "instances/slice_vec_char_ptr.h"
 #include "instances/vec_br_x509_trust_anchor.h"
 #include "instances/vec_char_ptr.h"
+#include "instances/vec_slice_uint8_t.h"
 #include "instances/vec_uint8_t.h"
 #include "oscompatlayer.h"
 #include "pathutils.h"
@@ -78,7 +78,26 @@ bool package_data(
   return true;
 }
 
+typedef enum {
+  REPOSITORY_KIND_FILE,
+  REPOSITORY_KIND_HTTP
+} RepositoryKind;
+
 typedef struct {
+  RepositoryKind kind;
+
+  union {
+    struct {
+      char *path;
+    } file;
+
+    struct {
+      HttpProtocol protocol;
+      uint16_t port;
+
+    } http;
+  };
+
   const char *repository;
   bool failed;
   vec_char_ptr entries;
@@ -220,8 +239,8 @@ static ErrVal populate_file(Repository *r) {
   return ERR_OK;
 }
 
-static ErrVal populate_http
-
+static ErrVal populate_http(Repository *r) {
+}
 
 ErrVal resolve_package_paths_installed(
   llrb_char_ptr_resolvedpackage *resolved_packages,
@@ -231,15 +250,16 @@ ErrVal resolve_package_paths_installed(
 ) {
   Repository installedrepo;
   installedrepo.repository = directory;
-  installedrepo.failed= false;
+  installedrepo.failed = false;
   vec_char_ptr_init(&installedrepo.entries);
   defer vec_char_ptr_delete_and_freeowned(&installedrepo.entries);
   ErrVal pfe = populate_file(&installedrepo);
-  if(pfe != 0) {
+  if (pfe != 0) {
     return pfe;
   }
 
-  ErrVal rnpe = resolve_newest_packages(resolved_packages, 1, &installedrepo, packages, none_is_all);
+  ErrVal rnpe =
+    resolve_newest_packages(resolved_packages, 1, &installedrepo, packages, none_is_all);
   if (rnpe != 0) {
     return rnpe;
   }
@@ -261,20 +281,18 @@ static HttpCallbackError tofile_callback(void *context, const uint8_t *buf, size
 }
 
 static HttpCallbackError linkacc_callback(void *context, const uint8_t *buf, size_t buflen) {
-
-
 }
 
 // this is the only repository-external func to expose networking.
 // network init is lazy till here
 ErrVal resolve_and_fetch_package_paths_repositories(
   llrb_char_ptr_resolvedpackage *resolved_packages,
-  vec_char_ptr *repositories,
+  vec_slice_uint8_t *repositories,
   vec_char_ptr *packages,
   const char *directory,
   bool none_is_all,
   bool download,
-  vec_char_ptr *cacert_paths,
+  vec_slice_uint8_t *cacert_paths,
   bool strict_ssl
 ) {
   // prepare tcp
@@ -289,26 +307,49 @@ ErrVal resolve_and_fetch_package_paths_repositories(
   vec_br_x509_trust_anchor anchors;
   vec_br_x509_trust_anchor_init(&anchors);
   defer vec_br_x509_trust_anchor_delete_and_freeowned(&anchors);
-  for (size_t i = 0; i < vec_char_ptr_len(cacert_paths); i++) {
-    char *path = *vec_char_ptr_at(cacert_paths, i);
-    LOG_ERROR_ARGS(ERR_LEVEL_DEBUG, "tls setup: reading certificate file %s", path);
+  for (size_t i = 0; i < vec_slice_uint8_t_len(cacert_paths); i++) {
+    slice_uint8_t path = *vec_slice_uint8_t_at(cacert_paths, i);
+    LOG_ERROR_ARGS(
+      ERR_LEVEL_DEBUG,
+      "tls setup: reading certificate file %.*s",
+      (int)path.len,
+      path.data
+    );
     ReadTrustAnchorError e = read_trust_anchors(&anchors, path);
     switch (e) {
       case READ_TRUST_ANCHOR_ERR_OK:
-        LOG_ERROR_ARGS(ERR_LEVEL_DEBUG, "tls setup: successfully read certificate file %s", path);
+        LOG_ERROR_ARGS(
+          ERR_LEVEL_DEBUG,
+          "tls setup: successfully read certificate file %.*s",
+          (int)path.len,
+          path.data
+        );
         break;
       case READ_TRUST_ANCHOR_NOTFOUND:
-        LOG_ERROR_ARGS(ERR_LEVEL_DEBUG, "tls setup: did not find certificate file %s", path);
+        LOG_ERROR_ARGS(
+          ERR_LEVEL_DEBUG,
+          "tls setup: did not find certificate file %.*s",
+          (int)path.len,
+          path.data
+        );
         break;
       default:
         LOG_ERROR_ARGS(
           ERR_LEVEL_ERROR,
-          "tls setup: error parsing certificate file %s: %s",
-          path,
+          "tls setup: error parsing certificate file %.*s: %s",
+          (int)path.len,
+          path.data,
           readtrustanchor_strerror(e)
         );
         return ERR_UNKNOWN;
     }
+  }
+
+  // fetch from each of the sources
+  size_t n_repositories = vec_slice_uint8_t_len(repositories);
+  Repository *rs = calloc(n_repositories, sizeof(Repository));
+  for (size_t i = 0; i < n_repositories; i++) {
+    // rs[i].repository =
   }
 
   ErrVal v1 = resolve_newest_packages(resolved_packages, repositories, packages, none_is_all);

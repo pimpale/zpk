@@ -28,6 +28,8 @@ typedef enum SliceError {
 SliceError SLICE_FN(_init)(SLICE_T* slice, size_t len);
 // clone an existing slice, overwrite out
 SliceError SLICE_FN(_dup)(SLICE_T* src, SLICE_T* out);
+// compare for byte equality
+bool SLICE_FN(_eq(SLICE_T a, SLICE_T b));
 
 
 #undef SLICE_FN

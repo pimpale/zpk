@@ -30,146 +30,147 @@ char *expandtilde(const char *input) {
     return expanded;
 }
 
+
 // allocates
 char *normalize(const char *filename) {
-    char *out = malloc(strlen(filename) + 1);
-    size_t out_len = 0;
-    size_t comp_start = 0;
+  char *out = malloc(strlen(filename) + 1);
+  size_t out_len = 0;
+  size_t comp_start = 0;
 
-    enum {
-        CS_START,
-        CS_ONEDOT,
-        CS_TWODOTS,
-        CS_OTHER
-    } state = CS_START;
+  enum {
+    CS_START,
+    CS_ONEDOT,
+    CS_TWODOTS,
+    CS_OTHER
+  } state = CS_START;
 
-    for (const char *p = filename;; p++) {
-        char c = *p;
-        if (c == '\0' || c == '/') {
-            if (state == CS_TWODOTS) {
-                free(out);
-                return NULL;
-            }
-            if (state == CS_START || state == CS_ONEDOT) {
-                // empty or "." component: drop it
-                out_len = comp_start;
-            } else if (c == '/') {
-                out[out_len++] = '/';
-                comp_start = out_len;
-            }
-            state = CS_START;
-            if (c == '\0') {
-                break;
-            }
-        } else if (c == '\\') {
-            // forbid \\ because it might be a path traversal on windows.
-            free(out);
-            return NULL;
-        } else {
-            out[out_len++] = c;
-            if (c == '.') {
-                if (state == CS_START) {
-                    state = CS_ONEDOT;
-                } else if (state == CS_ONEDOT) {
-                    state = CS_TWODOTS;
-                } else {
-                    state = CS_OTHER;
-                }
-            } else {
-                state = CS_OTHER;
-            }
-        }
-    }
-    if (out_len == 0) {
+  for (const char *p = filename;; p++) {
+    char c = *p;
+    if (c == '\0' || c == '/') {
+      if (state == CS_TWODOTS) {
         free(out);
         return NULL;
+      }
+      if (state == CS_START || state == CS_ONEDOT) {
+        // empty or "." component: drop it
+        out_len = comp_start;
+      } else if (c == '/') {
+        out[out_len++] = '/';
+        comp_start = out_len;
+      }
+      state = CS_START;
+      if (c == '\0') {
+        break;
+      }
+    } else if (c == '\\') {
+      // forbid \\ because it might be a path traversal on windows.
+      free(out);
+      return NULL;
+    } else {
+      out[out_len++] = c;
+      if (c == '.') {
+        if (state == CS_START) {
+          state = CS_ONEDOT;
+        } else if (state == CS_ONEDOT) {
+          state = CS_TWODOTS;
+        } else {
+          state = CS_OTHER;
+        }
+      } else {
+        state = CS_OTHER;
+      }
     }
-    // omit trailing / for normalization purposes
-    if (out[out_len - 1] == '/') {
-        out_len--;
-    }
-    out[out_len] = '\0';
+  }
+  if (out_len == 0) {
+    free(out);
+    return NULL;
+  }
+  // omit trailing / for normalization purposes
+  if (out[out_len - 1] == '/') {
+    out_len--;
+  }
+  out[out_len] = '\0';
 
-    return out;
+  return out;
 }
 
 bool startswith(const char *str, const char *prefix) {
-    size_t len = strlen(str);
-    size_t prelen = strlen(prefix);
-    if (prelen > len) {
-        return false;
-    }
-    return strncmp(str, prefix, prelen) == 0;
+  size_t len = strlen(str);
+  size_t prelen = strlen(prefix);
+  if (prelen > len) {
+    return false;
+  }
+  return strncmp(str, prefix, prelen) == 0;
 }
 
 bool endswith(const char *str, const char *suffix) {
-    size_t len = strlen(str);
-    size_t suflen = strlen(suffix);
-    if (suflen > len) {
-        return false;
-    }
-    return strcmp(str + (len - suflen), suffix) == 0;
+  size_t len = strlen(str);
+  size_t suflen = strlen(suffix);
+  if (suflen > len) {
+    return false;
+  }
+  return strcmp(str + (len - suflen), suffix) == 0;
 }
 
 // returns the last part of the path
 // the path MUST be absolute
 char *basename_m(char *input) {
-    char *c = strrchr(input, '/');
-    assert(c != NULL);
-    return c + 1;
+  char *c = strrchr(input, '/');
+  assert(c != NULL);
+  return c + 1;
 }
 
 char *joinstr2(const char *s1, const char *s2) {
-    size_t len1 = strlen(s1);
-    size_t len2 = strlen(s2);
-    char *result = malloc(len1 + len2 + 1);
+  size_t len1 = strlen(s1);
+  size_t len2 = strlen(s2);
+  char *result = malloc(len1 + len2 + 1);
 
-    if (result == NULL) {
-        return NULL;
-    }
+  if (result == NULL) {
+    return NULL;
+  }
 
-    strcpy(result, s1);
-    strcat(result, s2);
-    return result;
+  strcpy(result, s1);
+  strcat(result, s2);
+  return result;
 }
 
 char *joinpath(const char *s1, const char *s3) {
-    if (endswith(s1, "/")) {
-        return joinstr2(s1, s3);
-    }
-    const char *s2 = "/";
+  if (endswith(s1, "/")) {
+    return joinstr2(s1, s3);
+  }
+  const char *s2 = "/";
 
-    size_t len1 = strlen(s1);
-    size_t len2 = strlen(s2);
-    size_t len3 = strlen(s3);
-    char *result = malloc(len1 + len2 + len3 + 1);
+  size_t len1 = strlen(s1);
+  size_t len2 = strlen(s2);
+  size_t len3 = strlen(s3);
+  char *result = malloc(len1 + len2 + len3 + 1);
 
-    if (result == NULL) {
-        return NULL;
-    }
+  if (result == NULL) {
+    return NULL;
+  }
 
-    strcpy(result, s1);
-    strcat(result, s2);
-    strcat(result, s3);
-    return result;
+  strcpy(result, s1);
+  strcat(result, s2);
+  strcat(result, s3);
+  return result;
 }
 
 char *replacesuf(const char *input, const char *oldsuf, const char *newsuf) {
-    if (!endswith(input, oldsuf)) {
-        return NULL;
-    }
-    size_t inputlen = strlen(input);
-    size_t prefixlen = inputlen - strlen(oldsuf);
-    size_t newsuflen = strlen(newsuf);
-    char *result = malloc(prefixlen + newsuflen + 1);
-    if (result == NULL) {
-        return NULL;
-    }
-    memcpy(result, input, prefixlen);
-    strcpy(result + prefixlen, newsuf);
-    return result;
+  if (!endswith(input, oldsuf)) {
+    return NULL;
+  }
+  size_t inputlen = strlen(input);
+  size_t prefixlen = inputlen - strlen(oldsuf);
+  size_t newsuflen = strlen(newsuf);
+  char *result = malloc(prefixlen + newsuflen + 1);
+  if (result == NULL) {
+    return NULL;
+  }
+  memcpy(result, input, prefixlen);
+  strcpy(result + prefixlen, newsuf);
+  return result;
 }
 
 const char *maybesep(const char *in) {
-    return endswith(in, "/") ? "" : "/";
+  return endswith(in, "/") ? "" : "/";
 }

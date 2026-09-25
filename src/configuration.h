@@ -2,27 +2,30 @@
 #define configuration_h_INCLUDED
 
 #include "instances/vec_char_ptr.h"
+#include "instances/slice_uint8_t.h"
+#include "instances/vec_slice_uint8_t.h"
+
 
 typedef struct {
   // can download files but do not commit transaction to filesystem
   bool download_only;
   // where the packages are going to be installed to (defaults to /)
-  char *sysroot;
+   slice_uint8_t sysroot;
   // the installed package dir
   // defaults to $sysroot/pkg
-  char *installed_pkgs_path;
+  slice_uint8_t installed_pkgs_path;
   // the cached package dir 
   // defautls to $sysroot/pkgcache
-  char* cached_pkgs_path;
-  // a list of repositories (in URI format)
-  vec_char_ptr repositories;
+  slice_uint8_t cached_pkgs_path;
+  // a list of repositories (in URI format, alongside the context of the path)
+  vec_slice_uint8_t repositories;
   // See https://man.archlinux.org/man/apk-protected_paths.5.en
   // only supports + for now
-  vec_char_ptr protected_paths;
+  vec_slice_uint8_t protected_paths;
   // whether to actually verify ssl certificates
   bool strict_ssl;
   // the list of paths to PEM or CRT files. Will be trusted if something exists at that location.
-  vec_char_ptr cacert_paths;
+  vec_slice_uint8_t cacert_paths;
 } ZpkConfiguration;
 
 void delete_zpkconfiguration(ZpkConfiguration *config);
