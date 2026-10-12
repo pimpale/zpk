@@ -2,6 +2,12 @@
 #define html_a_parser_INCLUDED
 
 #include "instances/vec_uint8_t.h"
+#include <stddef.h>
+
+typedef enum {
+  LINK_ACC_ERR_OK = 0,
+  LINK_ACC_ERR_NOMEM
+} LinkAccError;
 
 typedef enum {
   // in the middle of a comment
@@ -22,7 +28,8 @@ typedef struct {
   vec_uint8_t tag;
   vec_uint8_t attribute;
 
-} LinkAccumulatorContext;
+} LinkAccContext;
 
+LinkAccError link_acc(LinkAccContext* context, const uint8_t* buf, size_t len);
 
 #endif

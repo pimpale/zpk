@@ -22,6 +22,8 @@ static HttpClientError convert_callback_err(HttpCallbackError e) {
       return HTTP_CLIENT_ERR_OUT_OF_MEMORY;
     case HTTP_CALLBACK_ERR_IO:
       return HTTP_CLIENT_ERR_CALLBACK_IO;
+    case HTTP_CALLBACK_ERR_UNKNOWN:
+      return HTTP_CLIENT_ERR_CALLBACK_UNKNOWN;
   }
 }
 
@@ -117,6 +119,8 @@ const char *httpstrerror(HttpClientError error) {
       return "out of memory";
     case HTTP_CLIENT_ERR_CALLBACK_IO:
       return "response output failed";
+    case HTTP_CLIENT_ERR_CALLBACK_UNKNOWN:
+      return "response callback failed";
     case HTTP_CLIENT_ERR_TCP_INVALID_ARGUMENT:
       return "invalid networking argument";
     case HTTP_CLIENT_ERR_TCP_HOST_NOT_FOUND:

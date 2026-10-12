@@ -10,6 +10,7 @@
 #include "apkver/apkver.h"
 #include "error.h"
 #include "fileutils.h"
+#include "html_a_parser.h"
 #include "http_client.h"
 #include "instances/llrb_char_ptr_resolvedpackage.h"
 #include "instances/slice_uint8_t.h"
@@ -22,6 +23,7 @@
 #include "resolvedpackage.h"
 #include "tcpcompatlayer.h"
 #include "tcpcompatlayer_error.h"
+#include "uri.h"
 
 bool version_is_greater(char *a, char *b) {
   return apk_version_compare_str(a, b) == APK_VERSION_GREATER;
@@ -78,36 +80,18 @@ bool package_data(
   return true;
 }
 
-typedef enum {
-  REPOSITORY_KIND_FILE,
-  REPOSITORY_KIND_HTTP
-} RepositoryKind;
-
 typedef struct {
-  RepositoryKind kind;
-
-  union {
-    struct {
-      char *path;
-    } file;
-
-    struct {
-      HttpProtocol protocol;
-      uint16_t port;
-
-    } http;
-  };
-
-  const char *repository;
+  slice_uint8_t uri;
   bool failed;
+  // the only owned portion of this struct
   vec_char_ptr entries;
-} Repository;
+} RepositoryCallbackData;
 
 // getting the newest package
 static ErrVal resolve_newest_packages(
   llrb_char_ptr_resolvedpackage *resolved_packages,
   size_t n_repositories,
-  Repository repositories[],
+  RepositoryCallbackData repositories[],
   vec_char_ptr *packages,
   bool none_is_all
 ) {
@@ -124,7 +108,7 @@ static ErrVal resolve_newest_packages(
     if (repositories[r].failed) {
       continue;
     }
-    const char *repository = repositories[r].repository;
+    slice_uint8_t repository = repositories[r].uri;
     vec_char_ptr *entries = &repositories[r].entries;
     size_t n_entries = vec_char_ptr_len(entries);
     for (size_t e = 0; e < n_entries; e++) {
@@ -144,7 +128,7 @@ static ErrVal resolve_newest_packages(
           .entry = strdup(entry),
           .package = strdup(entrypackagename),
           .version = strdup(entryversion),
-          .repository = strdup(repository),
+          .repository = slice_uint8_t_to_allocated_str(repository),
           .package_path = NULL
         };
         char *key = strdup(entrypackagename);
@@ -162,7 +146,7 @@ static ErrVal resolve_newest_packages(
 
           // take ownership of entry and entryversion
           brp->version = strdup(entryversion);
-          brp->repository = strdup(repository);
+          brp->repository = slice_uint8_t_to_allocated_str(repository);
         }
       }
     }
@@ -226,12 +210,14 @@ static ErrVal resolve_newest_packages(
   return ERR_OK;
 }
 
-static ErrVal populate_file(Repository *r) {
-  if (listdir_portable(r->repository, &r->entries, NULL) != 0) {
+static ErrVal populate_file(RepositoryCallbackData *r, slice_uint8_t path) {
+  char *path_asciiz = slice_uint8_t_to_allocated_str(path);
+  defer free(path_asciiz);
+  if (listdir_portable(path_asciiz, &r->entries, NULL) != 0) {
     LOG_ERROR_ARGS(
       ERR_LEVEL_ERROR,
       "resolve: unable to list files in %s: %s",
-      r->repository,
+      path_asciiz,
       strerror(errno)
     );
     return ERR_NOSUCHFILE;
@@ -239,7 +225,76 @@ static ErrVal populate_file(Repository *r) {
   return ERR_OK;
 }
 
-static ErrVal populate_http(Repository *r) {
+static HttpCallbackError linkacc_callback(void *context, const uint8_t *buf, size_t buflen) {
+  LinkAccError e = link_acc(context, buf, buflen);
+  switch (e) {
+    case LINK_ACC_ERR_OK:
+      return HTTP_CALLBACK_ERR_OK;
+    case LINK_ACC_ERR_NOMEM:
+      return HTTP_CALLBACK_ERR_OUT_OF_MEMORY;
+  }
+}
+
+static ErrVal
+populate_repository(RepositoryCallbackData *r, vec_br_x509_trust_anchor *anchors, bool strict_ssl) {
+  uri_parse_t parsed_uri;
+  bool parse_succeeded = decode_uri(r->uri, &parsed_uri);
+  // should have been caught earlier
+  assert(parse_succeeded);
+
+  HttpProtocol protocol;
+  if (slice_uint8_t_eq(parsed_uri.scheme, slice_uint8_t_from_str("file"))) {
+    return populate_file(r, parsed_uri.path);
+  } else if (slice_uint8_t_eq(parsed_uri.scheme, slice_uint8_t_from_str("http"))) {
+    protocol = HTTP_PROTOCOL_HTTP;
+  } else if (slice_uint8_t_eq(parsed_uri.scheme, slice_uint8_t_from_str("https"))) {
+    protocol = HTTP_PROTOCOL_HTTPS;
+  } else {
+    LOG_ERROR_ARGS(
+      ERR_LEVEL_ERROR,
+      "resolve: unknown scheme %*.s (only file:, http:, and https: permitted)",
+      (int)parsed_uri.scheme.len,
+      parsed_uri.scheme.data
+    );
+    return ERR_NOTSUPPORTED;
+  }
+
+  char *host_asciiz = slice_uint8_t_to_allocated_str(parsed_uri.host);
+  defer free(host_asciiz);
+
+  char *port_asciiz;
+  asprintf(
+    &port_asciiz,
+    "%d",
+    parsed_uri.has_port                ? parsed_uri.port
+      : protocol == HTTP_PROTOCOL_HTTP ? 80
+                                       : 443
+  );
+  defer free(port_asciiz);
+
+  char *path_asciiz = slice_uint8_t_to_allocated_str(parsed_uri.path);
+  defer free(path_asciiz);
+
+  LinkAccContext ctx = {};
+
+  HttpClientError hce = http_client_get(
+    protocol,
+    host_asciiz,
+    port_asciiz,
+    path_asciiz,
+    anchors,
+    strict_ssl,
+    &ctx,
+    linkacc_callback
+  );
+
+  switch (hce) {
+    case HTTP_CLIENT_ERR_OUT_OF_MEMORY:
+      return ERR_MEMORY;
+    default:
+      LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "resolve: http get failed: %s", httpstrerror(hce));
+      return ERR_UNKNOWN;
+  }
 }
 
 ErrVal resolve_package_paths_installed(
@@ -248,12 +303,11 @@ ErrVal resolve_package_paths_installed(
   vec_char_ptr *packages,
   bool none_is_all
 ) {
-  Repository installedrepo;
-  installedrepo.repository = directory;
+  RepositoryCallbackData installedrepo;
   installedrepo.failed = false;
   vec_char_ptr_init(&installedrepo.entries);
   defer vec_char_ptr_delete_and_freeowned(&installedrepo.entries);
-  ErrVal pfe = populate_file(&installedrepo);
+  ErrVal pfe = populate_file(&installedrepo, directory);
   if (pfe != 0) {
     return pfe;
   }
@@ -280,14 +334,11 @@ static HttpCallbackError tofile_callback(void *context, const uint8_t *buf, size
   return written == buflen ? HTTP_CALLBACK_ERR_OK : HTTP_CALLBACK_ERR_IO;
 }
 
-static HttpCallbackError linkacc_callback(void *context, const uint8_t *buf, size_t buflen) {
-}
-
 // this is the only repository-external func to expose networking.
 // network init is lazy till here
 ErrVal resolve_and_fetch_package_paths_repositories(
   llrb_char_ptr_resolvedpackage *resolved_packages,
-  vec_slice_uint8_t *repositories,
+  vec_slice_uint8_t *repository_uris,
   vec_char_ptr *packages,
   slice_uint8_t directory,
   bool none_is_all,
@@ -346,45 +397,49 @@ ErrVal resolve_and_fetch_package_paths_repositories(
   }
 
   // fetch from each of the sources
-  size_t n_repositories = vec_slice_uint8_t_len(repositories);
-  Repository *rs = calloc(n_repositories, sizeof(Repository));
-  for (size_t i = 0; i < n_repositories; i++) {
-    // rs[i].repository =
+  size_t n_repositories = vec_slice_uint8_t_len(repository_uris);
+  RepositoryCallbackData *repositories = calloc(n_repositories, sizeof(RepositoryCallbackData));
+  defer {
+    for (size_t i = 0; i < n_repositories; i++) {
+      vec_char_ptr_delete_and_freeowned(&repositories[i].entries);
+    }
+    defer free(repositories);
   }
 
-  ErrVal v1 = resolve_newest_packages(resolved_packages, repositories, packages, none_is_all);
+  // fetch from all repos in sequence for now.
+  // later we'll run all of them in parallel via threadpool
+  for (size_t i = 0; i < n_repositories; i++) {
+    repositories[i] =
+      (RepositoryCallbackData){.failed = false, .uri = *vec_slice_uint8_t_at(repository_uris, i)};
+    populate_repository(&repositories[i], &anchors, strict_ssl);
+  }
+
+  ErrVal v1 =
+    resolve_newest_packages(resolved_packages, n_repositories, repositories, packages, none_is_all);
   if (v1 != ERR_OK) {
     return v1;
   }
-  bool should_error = false;
 
-  llrb_char_ptr_resolvedpackage_iter iter;
-  llrb_char_ptr_resolvedpackage_iter_begin(resolved_packages, &iter);
-  char *key;
-  ResolvedPackage *rp;
-  while (llrb_char_ptr_resolvedpackage_iter_next_ref(&iter, &key, &rp)) {
-    char *src = joinpath(rp->repository, rp->entry);
-    // dest
-    rp->package_path = joinpath(directory, rp->entry);
+  if (download) {
+    bool should_error = false;
+    llrb_char_ptr_resolvedpackage_iter iter;
+    llrb_char_ptr_resolvedpackage_iter_begin(resolved_packages, &iter);
+    char *key;
+    ResolvedPackage *rp;
+    while (llrb_char_ptr_resolvedpackage_iter_next_ref(&iter, &key, &rp)) {
+      char *src = joinpath(rp->repository, rp->entry);
+      // dest
+      rp->package_path = joinpath_slice_str(directory, slice_uint8_t_from_str(rp->entry));
 
-    // test if the file doesn't yet exist
-    if (path_type_portable(rp->package_path) == PATH_TYPE_MISSING) {
-      if (copy_file(src, rp->package_path) != 0) {
-        LOG_ERROR_ARGS(
-          ERR_LEVEL_ERROR,
-          "fetch %s: copying %s to %s: %s",
-          rp->package,
-          src,
-          rp->package_path,
-          strerror(errno)
-        );
-        should_error = true;
+      // test if the file doesn't yet exist
+      if (path_type_portable(rp->package_path) == PATH_TYPE_MISSING) {
+      
       }
+      free(src);
     }
-    free(src);
-  }
-  if (should_error) {
-    return ERR_UNKNOWN;
+    if (should_error) {
+      return ERR_UNKNOWN;
+    }
   }
   return ERR_OK;
 }
