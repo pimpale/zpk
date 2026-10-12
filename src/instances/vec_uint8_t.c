@@ -9,5 +9,5 @@ vec_uint8_t vec_uint8_t_from_slice(slice_uint8_t slice) {
     .pData = slice.data,
     .cap = slice.len,
     .len = slice.len
-  }
+  };
 }

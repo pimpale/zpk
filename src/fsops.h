@@ -3,8 +3,10 @@
 
 #include "error.h"
 #include "index.h"
+#include "instances/slice_uint8_t.h"
 #include "instances/vec_fsop.h"
 #include "instances/vec_mz_zip_archive_ptr.h"
+#include "instances/vec_slice_uint8_t.h"
 
 void fsops_emit_mkdir(
   // for logging only
@@ -106,9 +108,9 @@ ErrVal fsops_emit_install_package(
   // zip file to install
   char *package_path,
   // where to install
-  char *sysroot,
+  slice_uint8_t sysroot,
   // protected paths
-  vec_char_ptr *protected_paths,
+  vec_slice_uint8_t *protected_paths,
   // refuse to proceed if a duplicate exists
   bool flag_duplicate
 );
@@ -124,9 +126,9 @@ ErrVal fsops_emit_uninstall_package(
   // zip file to uninstall
   char *package_path,
   // where to uninstall
-  char *sysroot,
+  slice_uint8_t sysroot,
   // protected paths
-  vec_char_ptr *protected_paths
+  vec_slice_uint8_t *protected_paths
 );
 
 void execute_fsops(

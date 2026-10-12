@@ -12,10 +12,10 @@
 #include "fileutils.h"
 #include "http_client.h"
 #include "instances/llrb_char_ptr_resolvedpackage.h"
+#include "instances/slice_uint8_t.h"
 #include "instances/vec_br_x509_trust_anchor.h"
 #include "instances/vec_char_ptr.h"
 #include "instances/vec_slice_uint8_t.h"
-#include "instances/vec_uint8_t.h"
 #include "oscompatlayer.h"
 #include "pathutils.h"
 #include "read_trust_anchor.h"
@@ -244,7 +244,7 @@ static ErrVal populate_http(Repository *r) {
 
 ErrVal resolve_package_paths_installed(
   llrb_char_ptr_resolvedpackage *resolved_packages,
-  char *directory,
+  slice_uint8_t directory,
   vec_char_ptr *packages,
   bool none_is_all
 ) {
@@ -289,7 +289,7 @@ ErrVal resolve_and_fetch_package_paths_repositories(
   llrb_char_ptr_resolvedpackage *resolved_packages,
   vec_slice_uint8_t *repositories,
   vec_char_ptr *packages,
-  const char *directory,
+  slice_uint8_t directory,
   bool none_is_all,
   bool download,
   vec_slice_uint8_t *cacert_paths,

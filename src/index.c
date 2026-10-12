@@ -10,6 +10,7 @@
 #include "instances/llrb_char_ptr_fileclaim.h"
 #include "instances/llrb_char_ptr_packagedata.h"
 #include "instances/llrb_path_filestatus.h"
+#include "instances/slice_uint8_t.h"
 #include "instances/vec_char_ptr.h"
 #include "oscompatlayer.h"
 #include "pathutils.h"
@@ -35,10 +36,10 @@ static bool insert_file_claim(llrb_char_ptr_fileclaim *claims,
                               // logging
                               const char *op, const char *pkg,
                               // sysroot
-                              const char *sysroot,
+                              slice_uint8_t sysroot,
                               // key pair to insert
                               char *path, const FileClaim *claim) {
-  char *fullpath = joinpath(sysroot, path);
+  char *fullpath = joinpath_slice_str(sysroot, slice_uint8_t_from_str(path));
   FileClaim *existing = NULL;
   if (!llrb_char_ptr_fileclaim_get_ref(claims, &fullpath, &existing)) {
     // the tree now owns `fullpath`
@@ -61,7 +62,7 @@ static bool insert_file_claim(llrb_char_ptr_fileclaim *claims,
 void fileclaims_collect(mz_zip_archive *zip,
                         // logging only
                         const char *op, const char *package,
-                        const char *sysroot, llrb_char_ptr_fileclaim *claims) {
+                        slice_uint8_t sysroot, llrb_char_ptr_fileclaim *claims) {
   llrb_char_ptr_fileclaim_new(claims);
   mz_uint num_files = mz_zip_reader_get_num_files(zip);
 COLLECT_ONE_FILE:
@@ -238,8 +239,8 @@ void remove_claims_from_index(FileIndex *fileindex, char *package,
 // the files in it
 // only_installed (mandatory for now) only builds the index with installed files
 // (useful for ownership tests)
-ErrVal fileindex_build(FileIndex *fileindex, const char *sysroot,
-                       char *pkgs_path) {
+ErrVal fileindex_build(FileIndex *fileindex, slice_uint8_t sysroot,
+                       slice_uint8_t pkgs_path) {
   llrb_char_ptr_packagedata *packages = &fileindex->packages;
   llrb_char_ptr_packagedata_new(packages);
 

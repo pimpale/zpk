@@ -21,7 +21,7 @@ bool package_data(
 
 ErrVal resolve_package_paths_installed(
     llrb_char_ptr_resolvedpackage *resolved_packages,
-    char *installed_directory,
+    slice_uint8_t installed_directory,
     vec_char_ptr *packages,
     bool none_is_all
 );
@@ -30,7 +30,7 @@ ErrVal resolve_and_fetch_package_paths_repositories(
     llrb_char_ptr_resolvedpackage *resolved_packages,
     vec_slice_uint8_t *repositories,
     vec_char_ptr *packages,
-    const char *cache_directory,
+    slice_uint8_t cache_directory,
     bool none_is_all,
     bool download,
     vec_slice_uint8_t *cacert_paths,

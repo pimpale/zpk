@@ -5,6 +5,7 @@
 #include "instances/llrb_char_ptr_packagedata.h"
 #include "instances/llrb_path_filestatus.h"
 #include "instances/llrb_path_indexdata.h"
+#include "instances/slice_uint8_t.h"
 
 #include <miniz/miniz.h>
 
@@ -15,7 +16,7 @@ typedef struct {
 } FileIndex;
 
 // file index manipulation ops
-ErrVal fileindex_build(FileIndex *index, const char* sysroot, char *pkgs_path);
+ErrVal fileindex_build(FileIndex *index, slice_uint8_t sysroot, slice_uint8_t pkgs_path);
 void fileindex_delete(FileIndex *index);
 
 bool fileindex_contains_package(FileIndex *index, char *package_basename,
@@ -33,7 +34,7 @@ FileStatus *fileindex_ensure_actual(FileIndex *index, const char *fullpath, cons
 void fileclaims_collect(mz_zip_archive *zip,
                         // logging only
                         const char *op, const char *package,
-                        const char* sysroot,
+                        slice_uint8_t sysroot,
                         llrb_char_ptr_fileclaim *claims);
 void fileclaims_delete(llrb_char_ptr_fileclaim *claims);
 

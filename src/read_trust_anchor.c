@@ -229,7 +229,9 @@ ReadTrustAnchorError read_trust_anchors(vec_br_x509_trust_anchor *anchors, slice
     return READ_TRUST_ANCHOR_ERR_OUT_OF_MEMORY;
   }
   defer vec_uint8_t_delete(&file);
-  if (read_file(path, &file) != 0) {
+  char* path_asciiz = slice_uint8_t_to_allocated_str(path);
+  defer free(path_asciiz);
+  if (read_file(path_asciiz, &file) != 0) {
     // no file is ok
     if (errno == ENOENT || errno == ENOTDIR) {
       return READ_TRUST_ANCHOR_NOTFOUND;
