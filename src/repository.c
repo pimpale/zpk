@@ -82,8 +82,14 @@ bool package_data(
 
 typedef struct {
   slice_uint8_t uri;
-  bool failed;
+  ErrVal status;
+
+  // networking stuff
+  vec_br_x509_trust_anchor *anchors;
+  bool strict_ssl;
+
   // the only owned portion of this struct
+  bool initialized;
   vec_char_ptr entries;
 } RepositoryCallbackData;
 
@@ -105,7 +111,7 @@ static ErrVal resolve_newest_packages(
   bool insert_all = none_is_all && (n_packages == 0);
 
   for (size_t r = 0; r < n_repositories; r++) {
-    if (repositories[r].failed) {
+    if (repositories[r].status != ERR_OK) {
       continue;
     }
     slice_uint8_t repository = repositories[r].uri;
@@ -210,7 +216,7 @@ static ErrVal resolve_newest_packages(
   return ERR_OK;
 }
 
-static ErrVal populate_file(RepositoryCallbackData *r, slice_uint8_t path) {
+static void populate_file(RepositoryCallbackData *r, slice_uint8_t path) {
   char *path_asciiz = slice_uint8_t_to_allocated_str(path);
   defer free(path_asciiz);
   if (listdir_portable(path_asciiz, &r->entries, NULL) != 0) {
@@ -220,9 +226,11 @@ static ErrVal populate_file(RepositoryCallbackData *r, slice_uint8_t path) {
       path_asciiz,
       strerror(errno)
     );
-    return ERR_NOSUCHFILE;
+    r->status = ERR_NOSUCHFILE;
+    return;
   }
-  return ERR_OK;
+  r->status = ERR_OK;
+  return;
 }
 
 static HttpCallbackError linkacc_callback(void *context, const uint8_t *buf, size_t buflen) {
@@ -235,8 +243,7 @@ static HttpCallbackError linkacc_callback(void *context, const uint8_t *buf, siz
   }
 }
 
-static ErrVal
-populate_repository(RepositoryCallbackData *r, vec_br_x509_trust_anchor *anchors, bool strict_ssl) {
+static void populate_repository(RepositoryCallbackData *r) {
   uri_parse_t parsed_uri;
   bool parse_succeeded = decode_uri(r->uri, &parsed_uri);
   // should have been caught earlier
@@ -244,7 +251,8 @@ populate_repository(RepositoryCallbackData *r, vec_br_x509_trust_anchor *anchors
 
   HttpProtocol protocol;
   if (slice_uint8_t_eq(parsed_uri.scheme, slice_uint8_t_from_str("file"))) {
-    return populate_file(r, parsed_uri.path);
+    populate_file(r, parsed_uri.path);
+    return;
   } else if (slice_uint8_t_eq(parsed_uri.scheme, slice_uint8_t_from_str("http"))) {
     protocol = HTTP_PROTOCOL_HTTP;
   } else if (slice_uint8_t_eq(parsed_uri.scheme, slice_uint8_t_from_str("https"))) {
@@ -256,7 +264,8 @@ populate_repository(RepositoryCallbackData *r, vec_br_x509_trust_anchor *anchors
       (int)parsed_uri.scheme.len,
       parsed_uri.scheme.data
     );
-    return ERR_NOTSUPPORTED;
+    r->status = ERR_NOTSUPPORTED;
+    return;
   }
 
   char *host_asciiz = slice_uint8_t_to_allocated_str(parsed_uri.host);
@@ -282,18 +291,115 @@ populate_repository(RepositoryCallbackData *r, vec_br_x509_trust_anchor *anchors
     host_asciiz,
     port_asciiz,
     path_asciiz,
-    anchors,
-    strict_ssl,
+    r->anchors,
+    r->strict_ssl,
     &ctx,
     linkacc_callback
   );
 
   switch (hce) {
     case HTTP_CLIENT_ERR_OUT_OF_MEMORY:
-      return ERR_MEMORY;
+      r->status = ERR_MEMORY;
+      return;
     default:
       LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "resolve: http get failed: %s", httpstrerror(hce));
-      return ERR_UNKNOWN;
+      r->status = ERR_UNKNOWN;
+      return;
+  }
+}
+
+typedef struct {
+  ErrVal status;
+
+  // networking settings
+  vec_br_x509_trust_anchor *anchors;
+  bool strict_ssl;
+
+  ResolvedPackage *rp;
+
+} FileDownloadCallbackData;
+
+static HttpCallbackError tofile_callback(void *context, const uint8_t *buf, size_t buflen) {
+  FILE *f = context;
+  size_t written = fwrite(buf, 1, buflen, f);
+  // error if written < buflen
+  return written == buflen ? HTTP_CALLBACK_ERR_OK : HTTP_CALLBACK_ERR_IO;
+}
+
+static void download_file(FileDownloadCallbackData *d) {
+  // parse uri and branch on repository
+  uri_parse_t parsed_uri;
+  bool parse_succeeded = decode_uri(slice_uint8_t_from_str(d->rp->repository), &parsed_uri);
+  // should have been caught earlier
+  assert(parse_succeeded);
+
+  char *path_asciiz = slice_uint8_t_to_allocated_str(parsed_uri.path);
+  defer free(path_asciiz);
+
+  HttpProtocol protocol;
+  if (slice_uint8_t_eq(parsed_uri.scheme, slice_uint8_t_from_str("file"))) {
+    if (copy_file(path_asciiz, d->rp->package_path) != 0) {
+      LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "download: copy file: %s", strerror(errno));
+      d->status = ERR_IO;
+      return;
+    }
+    d->status = ERR_OK;
+    return;
+  } else if (slice_uint8_t_eq(parsed_uri.scheme, slice_uint8_t_from_str("http"))) {
+    protocol = HTTP_PROTOCOL_HTTP;
+  } else if (slice_uint8_t_eq(parsed_uri.scheme, slice_uint8_t_from_str("https"))) {
+    protocol = HTTP_PROTOCOL_HTTPS;
+  } else {
+    LOG_ERROR_ARGS(
+      ERR_LEVEL_ERROR,
+      "download: unknown scheme %*.s (only file:, http:, and https: permitted)",
+      (int)parsed_uri.scheme.len,
+      parsed_uri.scheme.data
+    );
+    d->status = ERR_NOTSUPPORTED;
+    return;
+  }
+
+  char *host_asciiz = slice_uint8_t_to_allocated_str(parsed_uri.host);
+  defer free(host_asciiz);
+
+  char *port_asciiz;
+  asprintf(
+    &port_asciiz,
+    "%d",
+    parsed_uri.has_port                ? parsed_uri.port
+      : protocol == HTTP_PROTOCOL_HTTP ? 80
+                                       : 443
+  );
+  defer free(port_asciiz);
+
+  FILE *file = fopen(d->rp->package_path, "wb");
+  if (file == NULL) {
+    LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "download: couldn't open destination: %s", strerror(errno));
+    d->status = ERR_IO;
+    return;
+  }
+  defer fclose(file);
+
+  HttpClientError hce = http_client_get(
+    protocol,
+    host_asciiz,
+    port_asciiz,
+    path_asciiz,
+    d->anchors,
+    d->strict_ssl,
+    file,
+    tofile_callback
+  );
+
+  switch (hce) {
+    case HTTP_CLIENT_ERR_OUT_OF_MEMORY:
+      d->status = ERR_MEMORY;
+      return;
+    default:
+      LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "download: http get failed: %s", httpstrerror(hce));
+      d->status = ERR_UNKNOWN;
+      return;
   }
 }
 
@@ -304,12 +410,11 @@ ErrVal resolve_package_paths_installed(
   bool none_is_all
 ) {
   RepositoryCallbackData installedrepo;
-  installedrepo.failed = false;
   vec_char_ptr_init(&installedrepo.entries);
   defer vec_char_ptr_delete_and_freeowned(&installedrepo.entries);
-  ErrVal pfe = populate_file(&installedrepo, directory);
-  if (pfe != 0) {
-    return pfe;
+  populate_file(&installedrepo, directory);
+  if (installedrepo.status != ERR_OK) {
+    return installedrepo.status;
   }
 
   ErrVal rnpe =
@@ -325,13 +430,6 @@ ErrVal resolve_package_paths_installed(
     rp->package_path = joinpath(rp->repository, rp->entry);
   }
   return ERR_OK;
-}
-
-static HttpCallbackError tofile_callback(void *context, const uint8_t *buf, size_t buflen) {
-  FILE *f = context;
-  size_t written = fwrite(buf, 1, buflen, f);
-  // error if written < buflen
-  return written == buflen ? HTTP_CALLBACK_ERR_OK : HTTP_CALLBACK_ERR_IO;
 }
 
 // this is the only repository-external func to expose networking.
@@ -401,17 +499,25 @@ ErrVal resolve_and_fetch_package_paths_repositories(
   RepositoryCallbackData *repositories = calloc(n_repositories, sizeof(RepositoryCallbackData));
   defer {
     for (size_t i = 0; i < n_repositories; i++) {
-      vec_char_ptr_delete_and_freeowned(&repositories[i].entries);
+      if (repositories[i].initialized) {
+        vec_char_ptr_delete_and_freeowned(&repositories[i].entries);
+      }
     }
-    defer free(repositories);
+    free(repositories);
   }
 
   // fetch from all repos in sequence for now.
   // later we'll run all of them in parallel via threadpool
   for (size_t i = 0; i < n_repositories; i++) {
-    repositories[i] =
-      (RepositoryCallbackData){.failed = false, .uri = *vec_slice_uint8_t_at(repository_uris, i)};
-    populate_repository(&repositories[i], &anchors, strict_ssl);
+    repositories[i] = (RepositoryCallbackData){
+      .status = ERR_UNKNOWN,
+      .initialized = true,
+      .uri = *vec_slice_uint8_t_at(repository_uris, i),
+      .strict_ssl = strict_ssl,
+      .anchors = &anchors,
+    };
+    vec_char_ptr_init(&repositories->entries);
+    populate_repository(&repositories[i]);
   }
 
   ErrVal v1 =
@@ -420,26 +526,31 @@ ErrVal resolve_and_fetch_package_paths_repositories(
     return v1;
   }
 
-  if (download) {
-    bool should_error = false;
-    llrb_char_ptr_resolvedpackage_iter iter;
-    llrb_char_ptr_resolvedpackage_iter_begin(resolved_packages, &iter);
-    char *key;
-    ResolvedPackage *rp;
-    while (llrb_char_ptr_resolvedpackage_iter_next_ref(&iter, &key, &rp)) {
-      char *src = joinpath(rp->repository, rp->entry);
-      // dest
-      rp->package_path = joinpath_slice_str(directory, slice_uint8_t_from_str(rp->entry));
-
-      // test if the file doesn't yet exist
-      if (path_type_portable(rp->package_path) == PATH_TYPE_MISSING) {
-      
-      }
-      free(src);
-    }
-    if (should_error) {
-      return ERR_UNKNOWN;
-    }
+  if (!download) {
+    return ERR_OK;
   }
+
+  // eventually we'll download in parallel as well
+  size_t n_downloads = llrb_char_ptr_resolvedpackage_len(resolved_packages);
+  FileDownloadCallbackData *downloads = calloc(n_downloads, sizeof(RepositoryCallbackData));
+  defer free(downloads);
+
+  size_t i = 0;
+  llrb_char_ptr_resolvedpackage_iter iter;
+  llrb_char_ptr_resolvedpackage_iter_begin(resolved_packages, &iter);
+  char *key;
+  ResolvedPackage *rp;
+  while (llrb_char_ptr_resolvedpackage_iter_next_ref(&iter, &key, &rp)) {
+    downloads[i] = (FileDownloadCallbackData){
+      .status = ERR_UNKNOWN,
+      .anchors = &anchors,
+      .strict_ssl = strict_ssl,
+      .rp = rp
+    };
+    // for now we just do in sequence
+    download_file(&downloads[i]);
+    i++;
+  }
+
   return ERR_OK;
 }

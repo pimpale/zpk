@@ -22,14 +22,15 @@ typedef enum ErrSeverity {
 
 typedef enum ErrVal {
   ERR_OK = 0,
-  ERR_UNKNOWN = 1,
-  ERR_NOTSUPPORTED = 2,
-  ERR_UNSAFE = 3,
-  ERR_BADARGS = 4,
-  ERR_OUTOFDATE = 5,
-  ERR_ALLOCFAIL = 6,
-  ERR_MEMORY = 7,
-  ERR_NOSUCHFILE = 8,
+  ERR_IO,
+  ERR_UNKNOWN,
+  ERR_NOTSUPPORTED,
+  ERR_UNSAFE,
+  ERR_BADARGS,
+  ERR_OUTOFDATE,
+  ERR_ALLOCFAIL,
+  ERR_MEMORY,
+  ERR_NOSUCHFILE,
 } ErrVal;
 
 const char *levelstrerror(ErrSeverity level);
