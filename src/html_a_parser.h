@@ -31,7 +31,6 @@ typedef enum {
   LINK_ACC_HTML_A_BEFORE_HREF_VALUE,
   LINK_ACC_HTML_A_IN_HREF_SINGLE_QUOTED,
   LINK_ACC_HTML_A_IN_HREF_DOUBLE_QUOTED,
-  LINK_ACC_HTML_A_IN_HREF_UNQUOTED,
   LINK_ACC_HTML_A_AFTER_OTHER_ATTR_NAME,
   LINK_ACC_HTML_A_BEFORE_OTHER_ATTR_VALUE,
   LINK_ACC_HTML_A_SKIP_VALUE_SINGLE_QUOTED,
@@ -43,7 +42,7 @@ typedef struct {
   LinkAccState state;
   bool failed;
   vec_uint8_t linkbuf;
-  vec_char_ptr links;
+  vec_char_ptr* links;
 } LinkAccContext;
 
 LinkAccError link_acc(LinkAccContext *context, const uint8_t *buf, size_t len);

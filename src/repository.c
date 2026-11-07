@@ -291,7 +291,12 @@ static void populate_repository(RepositoryCallbackData *r) {
   char *path_asciiz = slice_uint8_t_to_allocated_str(parsed_uri.path);
   defer free(path_asciiz);
 
-  LinkAccContext ctx = {};
+  LinkAccContext ctx = {
+    .state=LINK_ACC_HTML_TEXT,
+    .failed=false,
+    .links=&r->entries
+  };
+  vec_uint8_t_init(&ctx.linkbuf);
 
   HttpClientError hce = http_client_get(
     protocol,
@@ -303,6 +308,8 @@ static void populate_repository(RepositoryCallbackData *r) {
     &ctx,
     linkacc_callback
   );
+
+  vec_uint8_t_delete(&ctx.linkbuf);
 
   switch (hce) {
     case HTTP_CLIENT_ERR_OK:
@@ -515,7 +522,7 @@ ErrVal resolve_and_fetch_package_paths_repositories(
       .strict_ssl = strict_ssl,
       .anchors = &anchors,
     };
-    vec_char_ptr_init(&repositories->entries);
+    vec_char_ptr_init(&repositories[i].entries);
     populate_repository(&repositories[i]);
   }
 
