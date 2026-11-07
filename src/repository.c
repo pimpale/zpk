@@ -99,7 +99,8 @@ static ErrVal resolve_newest_packages(
   size_t n_repositories,
   RepositoryCallbackData repositories[],
   vec_char_ptr *packages,
-  bool none_is_all
+  bool none_is_all,
+  slice_uint8_t directory
 ) {
   size_t n_packages;
   if (packages == NULL) {
@@ -213,6 +214,16 @@ static ErrVal resolve_newest_packages(
       return ERR_NOSUCHFILE;
     }
   }
+
+  // for the packages that are left in the tree, initialize their target path via directory
+  llrb_char_ptr_resolvedpackage_iter iter;
+  llrb_char_ptr_resolvedpackage_iter_begin(resolved_packages, &iter);
+  char *key;
+  ResolvedPackage rp;
+  while (llrb_char_ptr_resolvedpackage_iter_next(&iter, &key, &rp)) {
+    rp.package_path = joinpath_slice_str(directory, slice_uint8_t_from_str(rp.entry));
+  }
+
   return ERR_OK;
 }
 
@@ -271,13 +282,9 @@ static void populate_repository(RepositoryCallbackData *r) {
   char *host_asciiz = slice_uint8_t_to_allocated_str(parsed_uri.host);
   defer free(host_asciiz);
 
-  char *port_asciiz;
-  asprintf(
-    &port_asciiz,
-    "%d",
-    parsed_uri.has_port                ? parsed_uri.port
-      : protocol == HTTP_PROTOCOL_HTTP ? 80
-                                       : 443
+  char *port_asciiz = slice_uint8_t_to_allocated_str(
+    parsed_uri.has_port ? parsed_uri.port
+                        : slice_uint8_t_from_str(protocol == HTTP_PROTOCOL_HTTP ? "80" : "443")
   );
   defer free(port_asciiz);
 
@@ -298,6 +305,9 @@ static void populate_repository(RepositoryCallbackData *r) {
   );
 
   switch (hce) {
+    case HTTP_CLIENT_ERR_OK:
+      r->status = ERR_OK;
+      return;
     case HTTP_CLIENT_ERR_OUT_OF_MEMORY:
       r->status = ERR_MEMORY;
       return;
@@ -363,13 +373,9 @@ static void download_file(FileDownloadCallbackData *d) {
   char *host_asciiz = slice_uint8_t_to_allocated_str(parsed_uri.host);
   defer free(host_asciiz);
 
-  char *port_asciiz;
-  asprintf(
-    &port_asciiz,
-    "%d",
-    parsed_uri.has_port                ? parsed_uri.port
-      : protocol == HTTP_PROTOCOL_HTTP ? 80
-                                       : 443
+  char *port_asciiz = slice_uint8_t_to_allocated_str(
+    parsed_uri.has_port ? parsed_uri.port
+                        : slice_uint8_t_from_str(protocol == HTTP_PROTOCOL_HTTP ? "80" : "443")
   );
   defer free(port_asciiz);
 
@@ -418,16 +424,9 @@ ErrVal resolve_package_paths_installed(
   }
 
   ErrVal rnpe =
-    resolve_newest_packages(resolved_packages, 1, &installedrepo, packages, none_is_all);
+    resolve_newest_packages(resolved_packages, 1, &installedrepo, packages, none_is_all, directory);
   if (rnpe != 0) {
     return rnpe;
-  }
-
-  llrb_char_ptr_resolvedpackage_iter iter;
-  llrb_char_ptr_resolvedpackage_iter_begin(resolved_packages, &iter);
-  ResolvedPackage *rp;
-  while (llrb_char_ptr_resolvedpackage_iter_next_ref(&iter, NULL, &rp)) {
-    rp->package_path = joinpath(rp->repository, rp->entry);
   }
   return ERR_OK;
 }
@@ -520,8 +519,14 @@ ErrVal resolve_and_fetch_package_paths_repositories(
     populate_repository(&repositories[i]);
   }
 
-  ErrVal v1 =
-    resolve_newest_packages(resolved_packages, n_repositories, repositories, packages, none_is_all);
+  ErrVal v1 = resolve_newest_packages(
+    resolved_packages,
+    n_repositories,
+    repositories,
+    packages,
+    none_is_all,
+    directory
+  );
   if (v1 != ERR_OK) {
     return v1;
   }

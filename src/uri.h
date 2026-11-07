@@ -9,7 +9,7 @@ typedef struct {
     slice_uint8_t scheme;
     slice_uint8_t host;
     bool has_port;
-    uint16_t port;
+    slice_uint8_t port;
     slice_uint8_t path;
 }  uri_parse_t;
 

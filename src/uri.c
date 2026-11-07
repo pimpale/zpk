@@ -1,5 +1,7 @@
 #include "uri.h"
 #include "instances/slice_uint8_t.h"
+#include "instances/vec_uint8_t.h"
+#include <stddefer.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -65,7 +67,7 @@ static bool parse_ipv6(slice_uint8_t input, size_t *pi, uri_parse_t *out) {
             break;
           case ']':
             out->host.len = i - oi - 1;
-            *pi = i+1;
+            *pi = i + 1;
             return true;
           default:
             return false;
@@ -120,10 +122,12 @@ static bool parse_host(slice_uint8_t input, size_t *i, uri_parse_t *out) {
 }
 
 static bool parse_port(slice_uint8_t input, size_t *pi, uri_parse_t *out) {
-  uint16_t *num = &out->port;
-  *num = 0;
+  uint16_t num = 0;
   size_t oi = *pi;
   size_t i = oi;
+
+  out->port.data = input.data + oi;
+
 LOOP:
   for (; i < input.len; i++) {
     uint8_t digit = 0;
@@ -136,15 +140,16 @@ LOOP:
 
         break LOOP;
     }
-    if (*num > (UINT16_MAX - digit) / 10) {
+    if (num > (UINT16_MAX - digit) / 10) {
       return false;
     }
-    *num = *num * 10 + digit;
+    num = num * 10 + digit;
   }
   if (i == oi) {
     return false;
   }
   *pi = i;
+  out->port.len = i - oi;
   return true;
 }
 
@@ -156,7 +161,7 @@ static bool parse_authority(slice_uint8_t input, size_t *i, uri_parse_t *out) {
     *i = oi;
     return false;
   }
-  *i+=2;
+  *i += 2;
 
   if (!parse_host(input, i, out)) {
     *i = oi;
@@ -237,7 +242,7 @@ static bool parse_uri(slice_uint8_t input, size_t *i, uri_parse_t *out) {
     *i = oi;
     return false;
   }
-  *i+=1;
+  *i += 1;
 
   // must have authority
   if (!parse_authority(input, i, out)) {
@@ -257,4 +262,40 @@ bool decode_uri(slice_uint8_t input, uri_parse_t *out) {
   *out = (uri_parse_t){0};
   size_t i = 0;
   return parse_uri(input, &i, out);
+}
+
+bool encode_uri(slice_uint8_t *output, uri_parse_t parsed) {
+  vec_uint8_t out;
+  if (vec_uint8_t_init(&out) != VEC_ERR_OK) {
+    return false;
+  }
+  defer vec_uint8_t_delete(&out);
+
+  if (vec_uint8_t_pushv(&out, parsed.scheme.data, parsed.scheme.len) != VEC_ERR_OK) {
+    return false;
+  }
+  if (vec_uint8_t_pushv(&out, (const uint8_t *)"://", 3) != VEC_ERR_OK) {
+    return false;
+  }
+  if (vec_uint8_t_pushv(&out, parsed.host.data, parsed.host.len) != VEC_ERR_OK) {
+    return false;
+  }
+  if (parsed.has_port) {
+    if (vec_uint8_t_push(&out, (const uint8_t *)':') != VEC_ERR_OK) {
+      return false;
+    }
+    if (vec_uint8_t_pushv(&out, parsed.port.data, parsed.port.len) != VEC_ERR_OK) {
+      return false;
+    }
+  }
+
+  if (vec_uint8_t_pushv(&out, parsed.path.data, parsed.path.len) != VEC_ERR_OK) {
+    return false;
+  }
+  // transfer ownership to the slice
+  output->data = out.pData;
+  output->len = out.len;
+  out.pData = NULL;
+  out.len = 0;
+  return true;
 }

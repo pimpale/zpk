@@ -1,10 +1,12 @@
 #include "pathutils.h"
 #include <assert.h>
 #include <stddefer.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "error.h"
+#include "instances/slice_uint8_t.h"
 #include "oscompatlayer.h"
 
 // allocates a new string with the tilde expanded to the user's home directory,
@@ -173,4 +175,28 @@ char *replacesuf(const char *input, const char *oldsuf, const char *newsuf) {
 
 const char *maybesep(const char *in) {
   return endswith(in, "/") ? "" : "/";
+}
+
+slice_uint8_t joinpath_slice(slice_uint8_t a, slice_uint8_t b) {
+  // could probably save a byte here
+  return slice_uint8_t_from_str(joinpath_slice_str(a, b));
+}
+
+
+char* joinpath_slice_str(slice_uint8_t a, slice_uint8_t b) {
+  size_t seplen;
+  if(a.len > 0 && a.data[a.len-1] == '/') {
+    seplen = 0;
+  } else {
+    seplen = 1;
+  }
+  char* out = malloc(a.len + seplen + b.len + 1);
+  assert(out != NULL);
+  memcpy(out, a.data, a.len);
+  if(seplen == 1) {
+    out[a.len] = '/';
+  }
+  memcpy(out+a.len+seplen, b.data, b.len);
+  out[a.len+seplen+b.len] = '\0';
+  return out;
 }

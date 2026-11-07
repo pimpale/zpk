@@ -2,7 +2,7 @@
 #define html_a_parser_INCLUDED
 
 #include "instances/vec_uint8_t.h"
-#include <stddef.h>
+#include "instances/vec_char_ptr.h"
 
 typedef enum {
   LINK_ACC_ERR_OK = 0,
@@ -10,26 +10,42 @@ typedef enum {
 } LinkAccError;
 
 typedef enum {
-  // in the middle of a comment
-  LINK_ACC_HTML_COMMENT,
-  // awaiting the -> that will end the comment
-  LINK_ACC_HTML_COMMENTEND_AWAIT_DASH_RANGLE,
-  // awaiting the > that will end the comment
-  LINK_ACC_HTML_COMMENTEND_AWAIT_RANGLE,
-  LINK_ACC_HTML_SAW_LANGLE,
-  LINK_ACC_HTML_COMMENTSTART_AWAIT_DASH_DASH,
-  LINK_ACC_HTML_COMMENTSTART_AWAIT_DASH,
-  LINK_ACC_HTML_AWAIT_TAGEND,
-  LINK_ACC_HTML_AWAIT_
-
+  LINK_ACC_HTML_TEXT,
+  LINK_ACC_HTML_AFTER_LT,
+  LINK_ACC_HTML_DECL_SAW_BANG,
+  LINK_ACC_HTML_DECL_SAW_BANG_DASH,
+  LINK_ACC_HTML_IN_COMMENT,
+  LINK_ACC_HTML_COMMENT_SAW_DASH,
+  LINK_ACC_HTML_COMMENT_SAW_DASH_DASH,
+  LINK_ACC_HTML_TAG_NAME_SAW_A,
+  LINK_ACC_HTML_SKIP_TAG,
+  LINK_ACC_HTML_SKIP_TAG_SINGLE_QUOTED,
+  LINK_ACC_HTML_SKIP_TAG_DOUBLE_QUOTED,
+  LINK_ACC_HTML_A_BEFORE_ATTR_NAME,
+  LINK_ACC_HTML_A_ATTR_NAME_SAW_H,
+  LINK_ACC_HTML_A_ATTR_NAME_SAW_HR,
+  LINK_ACC_HTML_A_ATTR_NAME_SAW_HRE,
+  LINK_ACC_HTML_A_ATTR_NAME_SAW_HREF,
+  LINK_ACC_HTML_A_SKIP_ATTR_NAME,
+  LINK_ACC_HTML_A_AFTER_HREF_NAME,
+  LINK_ACC_HTML_A_BEFORE_HREF_VALUE,
+  LINK_ACC_HTML_A_IN_HREF_SINGLE_QUOTED,
+  LINK_ACC_HTML_A_IN_HREF_DOUBLE_QUOTED,
+  LINK_ACC_HTML_A_IN_HREF_UNQUOTED,
+  LINK_ACC_HTML_A_AFTER_OTHER_ATTR_NAME,
+  LINK_ACC_HTML_A_BEFORE_OTHER_ATTR_VALUE,
+  LINK_ACC_HTML_A_SKIP_VALUE_SINGLE_QUOTED,
+  LINK_ACC_HTML_A_SKIP_VALUE_DOUBLE_QUOTED,
+  LINK_ACC_HTML_A_SKIP_VALUE_UNQUOTED,
 } LinkAccState;
 
 typedef struct {
-  vec_uint8_t tag;
-  vec_uint8_t attribute;
-
+  LinkAccState state;
+  bool failed;
+  vec_uint8_t linkbuf;
+  vec_char_ptr links;
 } LinkAccContext;
 
-LinkAccError link_acc(LinkAccContext* context, const uint8_t* buf, size_t len);
+LinkAccError link_acc(LinkAccContext *context, const uint8_t *buf, size_t len);
 
 #endif
