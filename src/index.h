@@ -2,7 +2,7 @@
 #define index_h_INCLUDED
 
 #include "error.h"
-#include "instances/llrb_char_ptr_packagedata.h"
+#include "instances/llrb_slice_uint8_t_packagedata.h"
 #include "instances/llrb_path_filestatus.h"
 #include "instances/llrb_path_indexdata.h"
 #include "instances/slice_uint8_t.h"
@@ -10,7 +10,7 @@
 #include <miniz/miniz.h>
 
 typedef struct {
-  llrb_char_ptr_packagedata packages;
+  llrb_slice_uint8_t_packagedata packages;
   llrb_path_indexdata index;
   llrb_path_filestatus statuses;
 } FileIndex;
@@ -19,32 +19,47 @@ typedef struct {
 ErrVal fileindex_build(FileIndex *index, slice_uint8_t sysroot, slice_uint8_t pkgs_path);
 void fileindex_delete(FileIndex *index);
 
-bool fileindex_contains_package(FileIndex *index, char *package_basename,
-                                bool *changed_during_transaction);
+bool fileindex_contains_package(
+  FileIndex *index,
+  slice_uint8_t package_basename,
+  bool *changed_during_transaction
+);
 
-FileStatus *fileindex_status_or_default(FileIndex *index, const char* fullpath, bool* created);
+FileStatus *fileindex_status_or_default(FileIndex *index, const char *fullpath, bool *created);
 
-FileStatus *fileindex_ensure_actual(FileIndex *index, const char *fullpath, const char *op, const char *pkg);
-
-  
+FileStatus *fileindex_ensure_actual(
+  FileIndex *index,
+  const char *fullpath,
+  const char *op,
+  slice_uint8_t package
+);
 
 // claim trees
 
 // collect all explicit (listed in zip) and implicit (parent directory) claims.
-void fileclaims_collect(mz_zip_archive *zip,
-                        // logging only
-                        const char *op, const char *package,
-                        slice_uint8_t sysroot,
-                        llrb_char_ptr_fileclaim *claims);
+void fileclaims_collect(
+  mz_zip_archive *zip,
+  // logging only
+  const char *op,
+  slice_uint8_t package,
+  slice_uint8_t sysroot,
+  llrb_char_ptr_fileclaim *claims
+);
 void fileclaims_delete(llrb_char_ptr_fileclaim *claims);
 
 // claim-tree file-index interactions
-void merge_claims_into_index(FileIndex *index, const char *package,
-                               llrb_char_ptr_fileclaim *claims,
-                               bool simulate_installed);
+void merge_claims_into_index(
+  FileIndex *index,
+  slice_uint8_t package,
+  llrb_char_ptr_fileclaim *claims,
+  bool simulate_installed
+);
 
-void remove_claims_from_index(FileIndex *index, char *package_basename,
-                              llrb_char_ptr_fileclaim *claims,
-                              bool simulate_uninstall);
+void remove_claims_from_index(
+  FileIndex *index,
+  slice_uint8_t package_basename,
+  llrb_char_ptr_fileclaim *claims,
+  bool simulate_uninstall
+);
 
 #endif // index_h_INCLUDED

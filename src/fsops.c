@@ -174,7 +174,7 @@ static ErrVal compute_match_status(
   // for logging only
   const char *op,
   // package
-  const char *package,
+  slice_uint8_t package,
   // path to the file we're considering (relative to sysroot)
   char *fullpath,
   // the corresponding fileclaim
@@ -232,7 +232,7 @@ static bool in_protected_paths(vec_slice_uint8_t *protected_paths, char *path) {
 void fsops_emit_mkdir(
   // for logging only
   const char *op,
-  const char *pkg,
+  slice_uint8_t pkg,
   // takes ownership of path
   char *path,
   // appends to this
@@ -240,7 +240,7 @@ void fsops_emit_mkdir(
   // simulates the behavior in fileindex
   FileIndex *index
 ) {
-  FsOp o = {.op = op, .pkg = strdup(pkg)};
+  FsOp o = {.op = op, .pkg = slice_uint8_t_to_allocated_str(pkg)};
   o.kind = FSOP_MKDIR;
   o.mkdir.path = path;
   vec_fsop_push(fsops, &o);
@@ -253,7 +253,7 @@ void fsops_emit_mkdir(
 void fsops_emit_install(
   // for logging only
   const char *op,
-  const char *pkg,
+  slice_uint8_t pkg,
   // takes ownership of path
   char *path,
   FileClaim claim,
@@ -267,7 +267,7 @@ void fsops_emit_install(
   if (claim.is_directory) {
     fsops_emit_mkdir(op, pkg, path, fsops, index);
   } else {
-    FsOp o = {.op = op, .pkg = strdup(pkg)};
+    FsOp o = {.op = op, .pkg = slice_uint8_t_to_allocated_str(pkg)};
     o.kind = FSOP_CREATEFILE;
     o.createfile.path = path;
     o.createfile.file_index = claim.file_index;
@@ -284,8 +284,11 @@ void fsops_emit_install(
   }
 }
 
-ErrVal fsops_emit_mkdir_p( // logging only
-    const char *op, const char *pkg,
+ErrVal fsops_emit_mkdir_p(
+   // logging only
+    const char *op, 
+    // package
+    slice_uint8_t pkg,
     // takes ownership
     char *path,
     // file index op
@@ -318,14 +321,14 @@ ErrVal fsops_emit_mkdir_p( // logging only
 void fsops_emit_rm(
   // logging
   const char *op,
-  const char *pkg,
+  slice_uint8_t pkg,
   // takes ownership
   char *path,
   vec_fsop *fsops,
   // simulates the behavior in fileindex
   FileIndex *index
 ) {
-  FsOp o = {.op = op, .pkg = strdup(pkg)};
+  FsOp o = {.op = op, .pkg = slice_uint8_t_to_allocated_str(pkg)};
   o.kind = FSOP_REMOVEFILE;
   o.removefile.path = path;
   vec_fsop_push(fsops, &o);
@@ -337,13 +340,13 @@ void fsops_emit_rm(
 
 void fsops_emit_rmdir(
   const char *op,
-  const char *pkg,
+  slice_uint8_t pkg,
   char *path,
   vec_fsop *fsops,
   // simulates the behavior in fileindex
   FileIndex *index
 ) {
-  FsOp o = {.op = op, .pkg = strdup(pkg)};
+  FsOp o = {.op = op, .pkg = slice_uint8_t_to_allocated_str(pkg)};
   o.kind = FSOP_RMDIR;
   o.rmdir.path = path;
   vec_fsop_push(fsops, &o);
@@ -355,13 +358,13 @@ void fsops_emit_rmdir(
 
 void fsops_emit_mv(
   const char *op,
-  const char *pkg,
+  slice_uint8_t pkg,
   char *from,
   char *to,
   vec_fsop *fsops,
   FileIndex *index
 ) {
-  FsOp o = {.op = op, .pkg = strdup(pkg), .kind = FSOP_RENAME, .rename = {.from = from, .to = to}};
+  FsOp o = {.op = op, .pkg = slice_uint8_t_to_allocated_str(pkg), .kind = FSOP_RENAME, .rename = {.from = from, .to = to}};
   vec_fsop_push(fsops, &o);
 
   // these may alias
@@ -377,13 +380,13 @@ void fsops_emit_mv(
 
 void fsops_emit_cp(
   const char *op,
-  const char *pkg,
+  slice_uint8_t pkg,
   char *from,
   char *to,
   vec_fsop *fsops,
   FileIndex *index
 ) {
-  FsOp o = {.op = op, .pkg = strdup(pkg), .kind = FSOP_COPY, .copy = {.from = from, .to = to}};
+  FsOp o = {.op = op, .pkg = slice_uint8_t_to_allocated_str(pkg), .kind = FSOP_COPY, .copy = {.from = from, .to = to}};
   vec_fsop_push(fsops, &o);
 
   // these may alias
@@ -401,7 +404,7 @@ void fsops_emit_cp(
 // fail to read a file
 ErrVal fsops_emit_rm_rf(
   const char *op,
-  const char *pkg,
+  slice_uint8_t pkg,
   // takes ownership
   char *path,
   vec_fsop *fsops,
@@ -518,7 +521,7 @@ static char *maybe_divert_path(
 ErrVal fsops_emit_install_package(
   const char *op,
   // the name of the package
-  const char *pkg,
+  slice_uint8_t package,
   // appends to this if the operation would succeed
   vec_fsop *fsops,
   // fsops refer to indexes in the zips. appends to this if the operation
@@ -536,11 +539,6 @@ ErrVal fsops_emit_install_package(
   // refuse to proceed if a duplicate exists
   bool flag_duplicate
 ) {
-
-  // avoid const problems
-  char *package = strdup(pkg);
-  defer free(package);
-
   bool changed_during_transaction = false;
   if (flag_duplicate && fileindex_contains_package(index, package, &changed_during_transaction)) {
     LOG_ERROR_ARGS(
@@ -629,7 +627,7 @@ ErrVal fsops_emit_install_package(
         should_not_install = true;
       } else {
         if (in_protected_paths(protected_paths, path)) {
-          if (fsops_emit_rm_rf(op, package, joinstr2(path, ".zpknew"), &pkfsops, index) != ERR_OK) {
+          if (fsops_emit_rm_rf(op, pkg, joinstr2(path, ".zpknew"), &pkfsops, index) != ERR_OK) {
             should_not_install = true;
             continue;
           }
@@ -642,7 +640,7 @@ ErrVal fsops_emit_install_package(
             path,
             path
           );
-          fsops_emit_install(op, package, joinstr2(path, ".zpknew"), claim, pZip, &pkfsops, index);
+          fsops_emit_install(op, pkg, joinstr2(path, ".zpknew"), claim, pZip, &pkfsops, index);
 
           // emit diversion for future files
           char *src = strdup(path);
@@ -660,17 +658,17 @@ ErrVal fsops_emit_install_package(
             path
           );
           if (
-            fsops_emit_rm_rf(op, package, joinstr2(path, ".zpksave"), &pkfsops, index) != ERR_OK
+            fsops_emit_rm_rf(op, pkg, joinstr2(path, ".zpksave"), &pkfsops, index) != ERR_OK
           ) {
             should_not_install = true;
             continue;
           }
-          fsops_emit_mv(op, package, strdup(path), joinstr2(path, ".zpksave"), &pkfsops, index);
-          fsops_emit_install(op, package, strdup(path), claim, pZip, &pkfsops, index);
+          fsops_emit_mv(op, pkg, strdup(path), joinstr2(path, ".zpksave"), &pkfsops, index);
+          fsops_emit_install(op, pkg, strdup(path), claim, pZip, &pkfsops, index);
         }
       }
     } else {
-      fsops_emit_install(op, package, strdup(path), claim, pZip, &pkfsops, index);
+      fsops_emit_install(op, pkg, strdup(path), claim, pZip, &pkfsops, index);
     }
   }
 
@@ -694,7 +692,7 @@ ErrVal fsops_emit_uninstall_package(
   //
   const char *op,
   // the name of the package
-  const char *package,
+  slice_uint8_t package,
   // appends to this if the operation would succeed
   vec_fsop *fsops,
   // file index (for file conflict identification)

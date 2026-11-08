@@ -6,9 +6,11 @@
 char *expandtilde(const char *input);
 char *normalize(const char *path);
 char *basename_m(char *input);
+slice_uint8_t basename_slice(slice_uint8_t basename) ;
 bool startswith(const char *str, const char *prefix);
 bool endswith(const char *str, const char *suffix);
 char *joinstr2(const char *s1, const char *s2);
+slice_uint8_t joinslice(slice_uint8_t s1, slice_uint8_t s2);
 char *joinpath(const char *s1, const char* s2);
 slice_uint8_t joinpath_slice(slice_uint8_t a, slice_uint8_t b);
 char* joinpath_slice_str(slice_uint8_t a, slice_uint8_t b);

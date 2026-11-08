@@ -2,7 +2,7 @@
 #define html_a_parser_INCLUDED
 
 #include "instances/vec_uint8_t.h"
-#include "instances/vec_char_ptr.h"
+#include "instances/vec_slice_uint8_t.h"
 
 typedef enum {
   LINK_ACC_ERR_OK = 0,
@@ -42,7 +42,7 @@ typedef struct {
   LinkAccState state;
   bool failed;
   vec_uint8_t linkbuf;
-  vec_char_ptr* links;
+  vec_slice_uint8_t* links;
 } LinkAccContext;
 
 LinkAccError link_acc(LinkAccContext *context, const uint8_t *buf, size_t len);

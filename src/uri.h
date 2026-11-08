@@ -7,6 +7,7 @@
 // here scheme + : + [//host + [:port]] + [/path]
 typedef struct {
     slice_uint8_t scheme;
+    bool has_authority;
     slice_uint8_t host;
     bool has_port;
     slice_uint8_t port;

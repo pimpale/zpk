@@ -31,7 +31,7 @@ static int do_fetch(ZpkConfiguration *conf, vec_char_ptr *targets, char *path) {
 static int do_add(ZpkConfiguration *conf, vec_char_ptr *packages) {
   LOG_ERROR_ARGS(
     ERR_LEVEL_INFO,
-    "installing %zu targets to %*.s",
+    "installing %zu targets to %.*s",
     vec_char_ptr_len(packages),
     (int)conf->sysroot.len,
     conf->sysroot.data
@@ -72,8 +72,8 @@ static int do_add(ZpkConfiguration *conf, vec_char_ptr *packages) {
   defer vec_mz_zip_archive_ptr_delete_and_freeowned(&zips);
 
   fsops_emit_mkdir_p(
-    "prepare",
-    "install",
+    "insta",
+    slice_uint8_t_from_str("(all packages)"),
     slice_uint8_t_to_allocated_str(conf->sysroot),
     &fsops,
     &index
@@ -88,19 +88,17 @@ static int do_add(ZpkConfiguration *conf, vec_char_ptr *packages) {
 
     // journal intent by moving the thing first. Then we can patch it up. if
     // there's a crash.
-    char *dest = joinpath_slice_str(
-      conf->cached_pkgs_path,
-      slice_uint8_t_from_str(basename_m(rp.package_path))
-    );
-    fsops_emit_mv("install", rp.package, strdup(rp.package_path), dest, &fsops, &index);
+    char *dest =
+      joinpath_slice_str(conf->cached_pkgs_path, slice_uint8_t_from_str(basename_m(rp.local_path)));
+    fsops_emit_mv("install", rp.package.name, strdup(rp.local_path), dest, &fsops, &index);
 
     ErrVal err = fsops_emit_install_package(
       "install",
-      rp.package,
+      rp.package.name,
       &fsops,
       &zips,
       &index,
-      rp.package_path,
+      rp.local_path,
       conf->sysroot,
       &conf->protected_paths,
       true
@@ -121,7 +119,7 @@ static int do_add(ZpkConfiguration *conf, vec_char_ptr *packages) {
 static int do_del(ZpkConfiguration *conf, vec_char_ptr *packages) {
   LOG_ERROR_ARGS(
     ERR_LEVEL_INFO,
-    "removing %zu targets from %*.s",
+    "removing %zu targets from %.*s",
     vec_char_ptr_len(packages),
     (int)conf->sysroot.len,
     conf->sysroot.data
@@ -161,10 +159,10 @@ static int do_del(ZpkConfiguration *conf, vec_char_ptr *packages) {
   while (llrb_char_ptr_resolvedpackage_iter_next(&iter, NULL, &rp)) {
     ErrVal err = fsops_emit_uninstall_package(
       "uninstall",
-      rp.package,
+      rp.package.name,
       &fsops,
       &index,
-      rp.package_path,
+      rp.local_path,
       conf->sysroot,
       &conf->protected_paths
     );
@@ -174,11 +172,9 @@ static int do_del(ZpkConfiguration *conf, vec_char_ptr *packages) {
     }
 
     // if good to proceed remove the file from installed
-    char *dest = joinpath_slice_str(
-      conf->cached_pkgs_path,
-      slice_uint8_t_from_str(basename_m(rp.package_path))
-    );
-    fsops_emit_mv("uninstall", rp.package, strdup(rp.package_path), dest, &fsops, &index);
+    char *dest =
+      joinpath_slice_str(conf->cached_pkgs_path, slice_uint8_t_from_str(basename_m(rp.local_path)));
+    fsops_emit_mv("uninstall", rp.package.name, strdup(rp.local_path), dest, &fsops, &index);
   }
   if (!should_proceed) {
     return 1;
@@ -224,7 +220,7 @@ static int do_fix(ZpkConfiguration *conf, vec_char_ptr *packages) {
 
   fsops_emit_mkdir_p(
     "prepare",
-    "fix",
+    slice_uint8_t_from_str("(all packages)"),
     slice_uint8_t_to_allocated_str(conf->sysroot),
     &fsops,
     &index
@@ -238,11 +234,11 @@ static int do_fix(ZpkConfiguration *conf, vec_char_ptr *packages) {
   while (llrb_char_ptr_resolvedpackage_iter_next(&iter, NULL, &rp)) {
     ErrVal err = fsops_emit_install_package(
       "fix",
-      rp.package,
+      rp.package.name,
       &fsops,
       &zips,
       &index,
-      rp.package_path,
+      rp.local_path,
       conf->sysroot,
       &conf->protected_paths,
       false
@@ -345,7 +341,7 @@ static int do_list(
       if (irp == NULL || arp == NULL) {
         continue;
       }
-      if (!version_is_greater(arp->version, irp->version)) {
+      if (!version_is_greater(arp->package.version, irp->package.version)) {
         continue;
       }
     }

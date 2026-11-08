@@ -1,13 +1,12 @@
 #include "html_a_parser.h"
-#include "instances/vec_char_ptr.h"
-#include "instances/vec_uint8_t.h"
+#include "instances/slice_uint8_t.h"
 
 static LinkAccError push_link(LinkAccContext *context) {
-  const uint8_t zero = 0;
-  if (vec_uint8_t_push(&context->linkbuf, &zero) != VEC_ERR_OK) {
-    return LINK_ACC_ERR_NOMEM;
-  }
-  if (vec_char_ptr_push(context->links, (char_ptr *)&context->linkbuf.pData) != VEC_ERR_OK) {
+  slice_uint8_t slice = {
+    .data = context->linkbuf.pData,
+    .len = context->linkbuf.len,
+  };
+  if (vec_slice_uint8_t_push(context->links, &slice) != VEC_ERR_OK) {
     return LINK_ACC_ERR_NOMEM;
   }
   if (vec_uint8_t_init(&context->linkbuf)) {

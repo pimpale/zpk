@@ -8,7 +8,7 @@
 #include "error.h"
 #include "index.h"
 #include "instances/llrb_char_ptr_fileclaim.h"
-#include "instances/llrb_char_ptr_packagedata.h"
+#include "instances/llrb_slice_uint8_t_packagedata.h"
 #include "instances/llrb_path_filestatus.h"
 #include "instances/slice_uint8_t.h"
 #include "instances/vec_char_ptr.h"
@@ -61,7 +61,8 @@ static bool insert_file_claim(llrb_char_ptr_fileclaim *claims,
 // collect all explicit (listed in zip) and implicit (parent directory) claims.
 void fileclaims_collect(mz_zip_archive *zip,
                         // logging only
-                        const char *op, const char *package,
+                        const char *op, 
+                        slice_uint8_t package,
                         slice_uint8_t sysroot, llrb_char_ptr_fileclaim *claims) {
   llrb_char_ptr_fileclaim_new(claims);
   mz_uint num_files = mz_zip_reader_get_num_files(zip);
@@ -119,11 +120,11 @@ COLLECT_ONE_FILE:
   }
 }
 
-bool fileindex_contains_package(FileIndex *fileindex, char *package,
+bool fileindex_contains_package(FileIndex *fileindex, slice_uint8_t package,
                                 bool *changed_during_transaction) {
-  llrb_char_ptr_packagedata *packages = &fileindex->packages;
+  llrb_slice_uint8_t_packagedata *packages = &fileindex->packages;
   PackageData packagedata;
-  if (llrb_char_ptr_packagedata_get(packages, &package, &packagedata)) {
+  if (llrb_slice_uint8_t_packagedata_get(packages, &package, &packagedata)) {
     *changed_during_transaction = packagedata.changed_during_transaction;
     return packagedata.installed;
   } else {
@@ -136,18 +137,18 @@ bool fileindex_contains_package(FileIndex *fileindex, char *package,
 // consuming the tree: each path key is either handed to the index or freed.
 // on return `claims` is empty (but not deleted!)
 // if the package already exists, don't crash
-void merge_claims_into_index(FileIndex *fileindex, const char *package,
+void merge_claims_into_index(FileIndex *fileindex, slice_uint8_t package,
                              llrb_char_ptr_fileclaim *claims,
                              bool simulate_installed) {
 
   {
-    llrb_char_ptr_packagedata *packages = &fileindex->packages;
+    llrb_slice_uint8_t_packagedata *packages = &fileindex->packages;
     char *owned_package_basename = strdup(package);
     PackageData packagedata_ins = {
         .installed = true,
         .changed_during_transaction = simulate_installed,
     };
-    if (llrb_char_ptr_packagedata_insert(packages, &owned_package_basename,
+    if (llrb_slice_uint8_t_packagedata_insert(packages, &owned_package_basename,
                                          &packagedata_ins) == NULL) {
       // the package already existed, we can free this
       // but remember: it can be the case that the package exists in the map but
@@ -155,7 +156,7 @@ void merge_claims_into_index(FileIndex *fileindex, const char *package,
       defer free(owned_package_basename);
 
       PackageData *packagedata_cur;
-      bool got_ref = llrb_char_ptr_packagedata_get_ref(
+      bool got_ref = llrb_slice_uint8_t_packagedata_get_ref(
           packages, &owned_package_basename, &packagedata_cur);
       assert(got_ref);
 
@@ -199,13 +200,13 @@ void merge_claims_into_index(FileIndex *fileindex, const char *package,
 // not there.
 // leaves tombstone entry in packages to allow us to raise more meaningful
 // errors
-void remove_claims_from_index(FileIndex *fileindex, char *package,
+void remove_claims_from_index(FileIndex *fileindex, slice_uint8_t package,
                               llrb_char_ptr_fileclaim *claims,
                               bool simulate_uninstall) {
-  llrb_char_ptr_packagedata *packages = &fileindex->packages;
+  llrb_slice_uint8_t_packagedata *packages = &fileindex->packages;
 
   PackageData *packagedata;
-  if (!llrb_char_ptr_packagedata_get_ref(packages, &package, &packagedata)) {
+  if (!llrb_slice_uint8_t_packagedata_get_ref(packages, &package, &packagedata)) {
     // return early, was never there
     return;
   }
@@ -241,8 +242,8 @@ void remove_claims_from_index(FileIndex *fileindex, char *package,
 // (useful for ownership tests)
 ErrVal fileindex_build(FileIndex *fileindex, slice_uint8_t sysroot,
                        slice_uint8_t pkgs_path) {
-  llrb_char_ptr_packagedata *packages = &fileindex->packages;
-  llrb_char_ptr_packagedata_new(packages);
+  llrb_slice_uint8_t_packagedata *packages = &fileindex->packages;
+  llrb_slice_uint8_t_packagedata_new(packages);
 
   llrb_path_indexdata *index = &fileindex->index;
   llrb_path_indexdata_new(index);
@@ -267,16 +268,16 @@ ErrVal fileindex_build(FileIndex *fileindex, slice_uint8_t sysroot,
     mz_zip_archive zip;
     mz_zip_zero_struct(&zip);
     defer mz_zip_reader_end(&zip);
-    if (!mz_zip_reader_init_file(&zip, rp.package_path, 0)) {
+    if (!mz_zip_reader_init_file(&zip, rp.local_path, 0)) {
       LOG_ERROR_ARGS(ERR_LEVEL_ERROR,
                      "index %s: could not open zip archive: %s",
-                     rp.package_path,
+                     rp.local_path,
                      mz_zip_get_error_string(mz_zip_get_last_error(&zip)));
       continue;
     }
     llrb_char_ptr_fileclaim claims;
-    fileclaims_collect(&zip, "index", rp.package, sysroot, &claims);
-    merge_claims_into_index(fileindex, rp.package, &claims, false);
+    fileclaims_collect(&zip, "index", rp.package.name, sysroot, &claims);
+    merge_claims_into_index(fileindex, rp.package.name, &claims, false);
     fileclaims_delete(&claims);
   }
   return ERR_OK;
@@ -285,7 +286,7 @@ ErrVal fileindex_build(FileIndex *fileindex, slice_uint8_t sysroot,
 // computes the whole-file crc32 into *out. op/pkg are only for log context and
 // may be NULL to log without it
 static ErrVal file_crc32(const char *path, uint32_t *out, const char *op,
-                         const char *pkg) {
+                           slice_uint8_t package) {
   FILE *f = fopen(path, "rb");
   if (f == NULL) {
     if (op != NULL && pkg != NULL) {
@@ -341,7 +342,7 @@ FileStatus *fileindex_status_or_default(FileIndex *fileindex,
 FileStatus *fileindex_ensure_actual(FileIndex *fileindex,
                                     const char *fullpath,
                                     // logging purposes only
-                                    const char *op, const char *pkg) {
+                                    const char *op,   slice_uint8_t package) {
   bool created;
   FileStatus *status =
       fileindex_status_or_default(fileindex, fullpath, &created);
@@ -406,6 +407,6 @@ void fileindex_delete(FileIndex *fileindex) {
     free(index_key);
   }
   llrb_path_indexdata_delete(index);
-  llrb_char_ptr_packagedata_delete_and_freeowned(&fileindex->packages);
+  llrb_slice_uint8_t_packagedata_delete_and_freeowned(&fileindex->packages);
   llrb_path_filestatus_delete_and_freeowned(&fileindex->statuses);
 }

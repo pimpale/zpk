@@ -6,18 +6,7 @@
 #include "instances/vec_char_ptr.h"
 #include "instances/vec_slice_uint8_t.h"
 
-
-bool package_data(
-    // if not NULL, allocates a string containing just the package name
-    char **package_name,
-    // if not NULL, allocates a string containing just the package name
-    char **package_version,
-    // package basename
-    char *entry,
-    // .zip, or .uninstalling.zip or something.
-    // Will be ignored from the package name
-    const char *suffix
-);
+bool version_is_greater(slice_uint8_t a, slice_uint8_t b);
 
 ErrVal resolve_package_paths_installed(
     llrb_char_ptr_resolvedpackage *resolved_packages,
@@ -36,7 +25,5 @@ ErrVal resolve_and_fetch_package_paths_repositories(
     vec_slice_uint8_t *cacert_paths,
     bool strict_ssl
 );
-
-bool version_is_greater(char *a, char *b);
 
 #endif // repository_h_INCLUDED

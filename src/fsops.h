@@ -11,7 +11,7 @@
 void fsops_emit_mkdir(
   // for logging only
   const char *op,
-  const char *pkg,
+  slice_uint8_t pkg,
   // takes ownership of path
   char *path,
   // appends to this
@@ -23,7 +23,7 @@ void fsops_emit_mkdir(
 void fsops_emit_install(
   // logging only
   const char *op,
-  const char *pkg,
+  slice_uint8_t pkg,
   // takes ownership
   char *path,
   FileClaim claim,
@@ -33,17 +33,19 @@ void fsops_emit_install(
   FileIndex *index
 );
 ErrVal fsops_emit_mkdir_p( // logging only
-    const char *op, const char *pkg,
+    const char *op,  
+    slice_uint8_t pkg,
     // takes ownership
     char *path,
     // file index op
     vec_fsop *fsops,
     // simulates the behavior in fileindex
     FileIndex *index);
+
 void fsops_emit_rm(
   // logging only
   const char *op,
-  const char *pkg,
+  slice_uint8_t pkg,
   // takes ownership
   char *path,
   vec_fsop *fsops,
@@ -54,7 +56,7 @@ void fsops_emit_rm(
 void fsops_emit_rmdir(
   // logging only
   const char *op,
-  const char *pkg,
+  slice_uint8_t pkg,
   // takes ownership
   char *path,
   vec_fsop *fsops,
@@ -64,7 +66,7 @@ void fsops_emit_rmdir(
 
 void fsops_emit_mv(
   const char *op,
-  const char *pkg,
+  slice_uint8_t pkg,
   char *from,
   char *to,
   vec_fsop *fsops,
@@ -74,7 +76,7 @@ void fsops_emit_mv(
 
 void fsops_emit_cp(
   const char *op,
-  const char *pkg,
+  slice_uint8_t pkg,
   char *from,
   char *to,
   vec_fsop *fsops,
@@ -84,7 +86,7 @@ void fsops_emit_cp(
 
 ErrVal fsops_emit_rm_rf(
   const char *op,
-  const char *pkg,
+  slice_uint8_t pkg,
   // takes ownership
   char *path,
   // appends to this
@@ -97,7 +99,7 @@ ErrVal fsops_emit_install_package(
   // install can be called as either a "fix", or "install" operation
   const char *op,
   // the package
-  const char *pkg,
+  slice_uint8_t pkg,
   // appends to this if the operation would succeed
   vec_fsop *fsops,
   // fsops refer to indexes in the zips. appends to this if the operation
@@ -118,7 +120,7 @@ ErrVal fsops_emit_install_package(
 ErrVal fsops_emit_uninstall_package(
   const char *op,
   // the package
-  const char *pkg,
+  slice_uint8_t pkg,
   // appends to this if the operation would succeed
   vec_fsop *fsops,
   // file index (for file conflict identification)

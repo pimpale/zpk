@@ -245,9 +245,8 @@ static bool parse_uri(slice_uint8_t input, size_t *i, uri_parse_t *out) {
   *i += 1;
 
   // must have authority
-  if (!parse_authority(input, i, out)) {
-    *i = oi;
-    return false;
+  if (parse_authority(input, i, out)) {
+    out->has_authority = true;
   }
 
   if (!parse_path(input, i, out)) {
@@ -274,18 +273,23 @@ bool encode_uri(slice_uint8_t *output, uri_parse_t parsed) {
   if (vec_uint8_t_pushv(&out, parsed.scheme.data, parsed.scheme.len) != VEC_ERR_OK) {
     return false;
   }
-  if (vec_uint8_t_pushv(&out, (const uint8_t *)"://", 3) != VEC_ERR_OK) {
+  if (vec_uint8_t_pushv(&out, (const uint8_t *)":", 1) != VEC_ERR_OK) {
     return false;
   }
-  if (vec_uint8_t_pushv(&out, parsed.host.data, parsed.host.len) != VEC_ERR_OK) {
-    return false;
-  }
-  if (parsed.has_port) {
-    if (vec_uint8_t_push(&out, (const uint8_t *)':') != VEC_ERR_OK) {
+  if (parsed.has_authority) {
+    if (vec_uint8_t_pushv(&out, (const uint8_t *)"//", 2) != VEC_ERR_OK) {
       return false;
     }
-    if (vec_uint8_t_pushv(&out, parsed.port.data, parsed.port.len) != VEC_ERR_OK) {
+    if (vec_uint8_t_pushv(&out, parsed.host.data, parsed.host.len) != VEC_ERR_OK) {
       return false;
+    }
+    if (parsed.has_port) {
+      if (vec_uint8_t_push(&out, (const uint8_t *)':') != VEC_ERR_OK) {
+        return false;
+      }
+      if (vec_uint8_t_pushv(&out, parsed.port.data, parsed.port.len) != VEC_ERR_OK) {
+        return false;
+      }
     }
   }
 

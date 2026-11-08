@@ -25,58 +25,63 @@
 #include "tcpcompatlayer_error.h"
 #include "uri.h"
 
-bool version_is_greater(char *a, char *b) {
-  return apk_version_compare_str(a, b) == APK_VERSION_GREATER;
+bool version_is_greater(slice_uint8_t a, slice_uint8_t b) {
+  return apk_version_compare(APK_BLOB_PTR_LEN(a.data, a.len), APK_BLOB_PTR_LEN(b.data, b.len))
+    == APK_VERSION_GREATER;
 }
 
 // doesn't allocate
-static apk_blob_t package_version_blob(char *entry, const char *suffix) {
-  if (!endswith(entry, suffix)) {
-    return APK_BLOB_NULL;
-  }
-
-  size_t entry_strlen = strlen(entry);
-  size_t suffix_strlen = strlen(suffix);
-
-  char *end = entry + (entry_strlen - suffix_strlen);
-  for (char *vstart_m1 = end; vstart_m1 > entry; vstart_m1--) {
+static slice_uint8_t package_version_blob(slice_uint8_t entry) {
+  uint8_t *end = entry.data + entry.len;
+  for (uint8_t *vstart_m1 = end; vstart_m1 > entry.data; vstart_m1--) {
     if (*vstart_m1 != '-') {
       continue;
     }
-    char *vstart = vstart_m1 + 1;
+    uint8_t *vstart = vstart_m1 + 1;
     apk_blob_t candidate_version = APK_BLOB_PTR_LEN(vstart, end - vstart);
 
     if (!apk_version_validate(candidate_version)) {
       continue;
     }
-    return candidate_version;
+    return (slice_uint8_t){.data = (uint8_t *)candidate_version.ptr, .len = candidate_version.len};
   }
-  return APK_BLOB_NULL;
+  return (slice_uint8_t){};
 }
 
-// allocates
-
-bool package_data(
-  // if not NULL, allocates a string containing just the package name
-  char **package_name,
-  // if not NULL, allocates a string containing just the package name
-  char **package_version,
-  // package basename
-  char *entry,
+// doesnt allocate
+static bool package_data(
+  parsed_package_t *parsed,
+  // path
+  slice_uint8_t path,
   // .zip, or .uninstalling.zip or something.
   // Will be ignored from the package name
   const char *suffix
 ) {
-  apk_blob_t version = package_version_blob(entry, suffix);
-  if (APK_BLOB_IS_NULL(version)) {
+  size_t suflen = strlen(suffix);
+
+  // get entry
+  parsed->entry = basename_slice(path);
+  if (parsed->entry.data == NULL) {
     return false;
   }
-  if (package_version != NULL) {
-    *package_version = strndup(version.ptr, version.len);
+
+  // validate entry ends with suffix
+  if (parsed->entry.len < suflen) {
+    return false;
   }
-  if (package_name != NULL) {
-    *package_name = strndup(entry, strlen(entry) - (1 + version.len + strlen(suffix)));
+  if (memcmp(parsed->entry.data + (parsed->entry.len - suflen), suffix, suflen) != 0) {
+    return false;
   }
+  slice_uint8_t suffixless = {.data = parsed->entry.data, .len = parsed->entry.len - suflen};
+
+  parsed->version = package_version_blob(suffixless);
+  if (parsed->version.data == NULL) {
+    return false;
+  }
+  parsed->name = (slice_uint8_t){
+    .data = parsed->entry.data,
+    .len = parsed->entry.len - (1 + parsed->version.len + suflen)
+  };
   return true;
 }
 
@@ -90,7 +95,7 @@ typedef struct {
 
   // the only owned portion of this struct
   bool initialized;
-  vec_char_ptr entries;
+  vec_slice_uint8_t package_uris;
 } RepositoryCallbackData;
 
 // getting the newest package
@@ -115,45 +120,43 @@ static ErrVal resolve_newest_packages(
     if (repositories[r].status != ERR_OK) {
       continue;
     }
-    slice_uint8_t repository = repositories[r].uri;
-    vec_char_ptr *entries = &repositories[r].entries;
-    size_t n_entries = vec_char_ptr_len(entries);
+    vec_slice_uint8_t *entries = &repositories[r].package_uris;
+    size_t n_entries = vec_slice_uint8_t_len(entries);
     for (size_t e = 0; e < n_entries; e++) {
-      char *entry = *vec_char_ptr_at(entries, e);
-
-      char *entrypackagename;
-      char *entryversion;
-      if (!package_data(&entrypackagename, &entryversion, entry, ".zip")) {
+      ResolvedPackage br = {};
+      if (
+        slice_uint8_t_dup(vec_slice_uint8_t_at(entries, e), &br.source_uri_storage) != SLICE_ERR_OK
+      ) {
+        return ERR_ALLOCFAIL;
+      }
+      if (!decode_uri(br.source_uri_storage, &br.source_uri)) {
+        free(br.source_uri_storage.data);
         continue;
       }
-      defer free(entrypackagename);
-      defer free(entryversion);
+      if (!package_data(&br.package, br.source_uri.path, ".zip")) {
+        free(br.source_uri_storage.data);
+        continue;
+      }
 
-      ResolvedPackage *brp;
-      if (!llrb_char_ptr_resolvedpackage_get_ref(resolved_packages, &entrypackagename, &brp)) {
-        ResolvedPackage br = {
-          .entry = strdup(entry),
-          .package = strdup(entrypackagename),
-          .version = strdup(entryversion),
-          .repository = slice_uint8_t_to_allocated_str(repository),
-          .package_path = NULL
-        };
-        char *key = strdup(entrypackagename);
-        brp = llrb_char_ptr_resolvedpackage_insert(resolved_packages, &key, &br);
-        assert(brp != NULL);
+      char *key = slice_uint8_t_to_allocated_str(br.package.name);
 
-      } else {
-        if (
-          apk_version_compare(APK_BLOB_STR(entryversion), APK_BLOB_STR(brp->version))
-          == APK_VERSION_GREATER
-        ) {
-          // free existing version and repository
-          free(brp->version);
-          free(brp->repository);
+      {
+        ResolvedPackage *brp;
+        if (!llrb_char_ptr_resolvedpackage_get_ref(resolved_packages, &key, &brp)) {
+          // own key, br
+          ResolvedPackage *new_brp =
+            llrb_char_ptr_resolvedpackage_insert(resolved_packages, &key, &br);
+          assert(new_brp != NULL);
+        } else {
+          free(key);
 
-          // take ownership of entry and entryversion
-          brp->version = strdup(entryversion);
-          brp->repository = slice_uint8_t_to_allocated_str(repository);
+          if (version_is_greater(br.package.version,brp->package.version)) {
+            // own br
+            delete_ResolvedPackage(brp);
+            *brp = br;
+          } else {
+            free(br.source_uri_storage.data);
+          }
         }
       }
     }
@@ -219,9 +222,9 @@ static ErrVal resolve_newest_packages(
   llrb_char_ptr_resolvedpackage_iter iter;
   llrb_char_ptr_resolvedpackage_iter_begin(resolved_packages, &iter);
   char *key;
-  ResolvedPackage rp;
-  while (llrb_char_ptr_resolvedpackage_iter_next(&iter, &key, &rp)) {
-    rp.package_path = joinpath_slice_str(directory, slice_uint8_t_from_str(rp.entry));
+  ResolvedPackage *rp;
+  while (llrb_char_ptr_resolvedpackage_iter_next_ref(&iter, &key, &rp)) {
+    rp->local_path = joinpath_slice_str(directory, rp->package.entry);
   }
 
   return ERR_OK;
@@ -230,7 +233,12 @@ static ErrVal resolve_newest_packages(
 static void populate_file(RepositoryCallbackData *r, slice_uint8_t path) {
   char *path_asciiz = slice_uint8_t_to_allocated_str(path);
   defer free(path_asciiz);
-  if (listdir_portable(path_asciiz, &r->entries, NULL) != 0) {
+
+  vec_char_ptr entries;
+  vec_char_ptr_init(&entries);
+  defer vec_char_ptr_delete_and_freeowned(&entries);
+
+  if (listdir_portable(path_asciiz, &entries, NULL) != 0) {
     LOG_ERROR_ARGS(
       ERR_LEVEL_ERROR,
       "resolve: unable to list files in %s: %s",
@@ -239,6 +247,15 @@ static void populate_file(RepositoryCallbackData *r, slice_uint8_t path) {
     );
     r->status = ERR_NOSUCHFILE;
     return;
+  }
+
+  // now iterate through and create the uris
+  slice_uint8_t file_uri_path = joinslice(slice_uint8_t_from_str("file:"), path);
+  defer free(file_uri_path.data);
+  for (size_t i = 0; i < vec_char_ptr_len(&entries); i++) {
+    slice_uint8_t output =
+      joinpath_slice(file_uri_path, slice_uint8_t_from_str(*vec_char_ptr_at(&entries, i)));
+    vec_slice_uint8_t_push(&r->package_uris, &output);
   }
   r->status = ERR_OK;
   return;
@@ -271,7 +288,7 @@ static void populate_repository(RepositoryCallbackData *r) {
   } else {
     LOG_ERROR_ARGS(
       ERR_LEVEL_ERROR,
-      "resolve: unknown scheme %*.s (only file:, http:, and https: permitted)",
+      "resolve: unknown scheme %.*s (only file:, http:, and https: permitted)",
       (int)parsed_uri.scheme.len,
       parsed_uri.scheme.data
     );
@@ -291,11 +308,7 @@ static void populate_repository(RepositoryCallbackData *r) {
   char *path_asciiz = slice_uint8_t_to_allocated_str(parsed_uri.path);
   defer free(path_asciiz);
 
-  LinkAccContext ctx = {
-    .state=LINK_ACC_HTML_TEXT,
-    .failed=false,
-    .links=&r->entries
-  };
+  LinkAccContext ctx = {.state = LINK_ACC_HTML_TEXT, .failed = false, .links = &r->package_uris};
   vec_uint8_t_init(&ctx.linkbuf);
 
   HttpClientError hce = http_client_get(
@@ -344,49 +357,50 @@ static HttpCallbackError tofile_callback(void *context, const uint8_t *buf, size
 }
 
 static void download_file(FileDownloadCallbackData *d) {
-  // parse uri and branch on repository
-  uri_parse_t parsed_uri;
-  bool parse_succeeded = decode_uri(slice_uint8_t_from_str(d->rp->repository), &parsed_uri);
-  // should have been caught earlier
-  assert(parse_succeeded);
-
-  char *path_asciiz = slice_uint8_t_to_allocated_str(parsed_uri.path);
+  char *path_asciiz = slice_uint8_t_to_allocated_str(d->rp->source_uri.path);
   defer free(path_asciiz);
 
   HttpProtocol protocol;
-  if (slice_uint8_t_eq(parsed_uri.scheme, slice_uint8_t_from_str("file"))) {
-    if (copy_file(path_asciiz, d->rp->package_path) != 0) {
+  if (slice_uint8_t_eq(d->rp->source_uri.scheme, slice_uint8_t_from_str("file"))) {
+    LOG_ERROR_ARGS(
+      ERR_LEVEL_DEBUG,
+      "download: copying file: from %s to %s",
+      path_asciiz,
+      d->rp->local_path
+    );
+    if (copy_file(path_asciiz, d->rp->local_path) != 0) {
       LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "download: copy file: %s", strerror(errno));
       d->status = ERR_IO;
       return;
     }
     d->status = ERR_OK;
     return;
-  } else if (slice_uint8_t_eq(parsed_uri.scheme, slice_uint8_t_from_str("http"))) {
+  } else if (slice_uint8_t_eq(d->rp->source_uri.scheme, slice_uint8_t_from_str("http"))) {
     protocol = HTTP_PROTOCOL_HTTP;
-  } else if (slice_uint8_t_eq(parsed_uri.scheme, slice_uint8_t_from_str("https"))) {
+  } else if (slice_uint8_t_eq(d->rp->source_uri.scheme, slice_uint8_t_from_str("https"))) {
     protocol = HTTP_PROTOCOL_HTTPS;
   } else {
     LOG_ERROR_ARGS(
       ERR_LEVEL_ERROR,
-      "download: unknown scheme %*.s (only file:, http:, and https: permitted)",
-      (int)parsed_uri.scheme.len,
-      parsed_uri.scheme.data
+      "download: unknown scheme %.*s (only file:, http:, and https: permitted)",
+      (int)d->rp->source_uri.scheme.len,
+      d->rp->source_uri.scheme.data
     );
     d->status = ERR_NOTSUPPORTED;
     return;
   }
 
-  char *host_asciiz = slice_uint8_t_to_allocated_str(parsed_uri.host);
+  char *host_asciiz = slice_uint8_t_to_allocated_str(d->rp->source_uri.host);
   defer free(host_asciiz);
 
   char *port_asciiz = slice_uint8_t_to_allocated_str(
-    parsed_uri.has_port ? parsed_uri.port
-                        : slice_uint8_t_from_str(protocol == HTTP_PROTOCOL_HTTP ? "80" : "443")
+    d->rp->source_uri.has_port
+      ? d->rp->source_uri.port
+      : slice_uint8_t_from_str(protocol == HTTP_PROTOCOL_HTTP ? "80" : "443")
   );
   defer free(port_asciiz);
 
-  FILE *file = fopen(d->rp->package_path, "wb");
+  FILE *file = fopen(d->rp->local_path, "wb");
   if (file == NULL) {
     LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "download: couldn't open destination: %s", strerror(errno));
     d->status = ERR_IO;
@@ -406,6 +420,9 @@ static void download_file(FileDownloadCallbackData *d) {
   );
 
   switch (hce) {
+    case HTTP_CLIENT_ERR_OK:
+      d->status = ERR_OK;
+      return;
     case HTTP_CLIENT_ERR_OUT_OF_MEMORY:
       d->status = ERR_MEMORY;
       return;
@@ -423,8 +440,8 @@ ErrVal resolve_package_paths_installed(
   bool none_is_all
 ) {
   RepositoryCallbackData installedrepo;
-  vec_char_ptr_init(&installedrepo.entries);
-  defer vec_char_ptr_delete_and_freeowned(&installedrepo.entries);
+  vec_slice_uint8_t_init(&installedrepo.package_uris);
+  defer vec_slice_uint8_t_delete_and_freeowned(&installedrepo.package_uris);
   populate_file(&installedrepo, directory);
   if (installedrepo.status != ERR_OK) {
     return installedrepo.status;
@@ -506,7 +523,7 @@ ErrVal resolve_and_fetch_package_paths_repositories(
   defer {
     for (size_t i = 0; i < n_repositories; i++) {
       if (repositories[i].initialized) {
-        vec_char_ptr_delete_and_freeowned(&repositories[i].entries);
+        vec_slice_uint8_t_delete_and_freeowned(&repositories[i].package_uris);
       }
     }
     free(repositories);
@@ -522,7 +539,7 @@ ErrVal resolve_and_fetch_package_paths_repositories(
       .strict_ssl = strict_ssl,
       .anchors = &anchors,
     };
-    vec_char_ptr_init(&repositories[i].entries);
+    vec_slice_uint8_t_init(&repositories[i].package_uris);
     populate_repository(&repositories[i]);
   }
 
@@ -547,22 +564,30 @@ ErrVal resolve_and_fetch_package_paths_repositories(
   FileDownloadCallbackData *downloads = calloc(n_downloads, sizeof(RepositoryCallbackData));
   defer free(downloads);
 
-  size_t i = 0;
-  llrb_char_ptr_resolvedpackage_iter iter;
-  llrb_char_ptr_resolvedpackage_iter_begin(resolved_packages, &iter);
-  char *key;
-  ResolvedPackage *rp;
-  while (llrb_char_ptr_resolvedpackage_iter_next_ref(&iter, &key, &rp)) {
-    downloads[i] = (FileDownloadCallbackData){
-      .status = ERR_UNKNOWN,
-      .anchors = &anchors,
-      .strict_ssl = strict_ssl,
-      .rp = rp
-    };
-    // for now we just do in sequence
-    download_file(&downloads[i]);
-    i++;
+  {
+    size_t i = 0;
+    llrb_char_ptr_resolvedpackage_iter iter;
+    llrb_char_ptr_resolvedpackage_iter_begin(resolved_packages, &iter);
+    char *key;
+    ResolvedPackage *rp;
+    while (llrb_char_ptr_resolvedpackage_iter_next_ref(&iter, &key, &rp)) {
+      downloads[i] = (FileDownloadCallbackData){
+        .status = ERR_UNKNOWN,
+        .anchors = &anchors,
+        .strict_ssl = strict_ssl,
+        .rp = rp
+      };
+      // for now we just do in sequence
+      download_file(&downloads[i]);
+      i++;
+    }
   }
 
+  // on download error, bail
+  for (size_t i = 0; i < n_downloads; i++) {
+    if (downloads[i].status != ERR_OK) {
+      return downloads[i].status;
+    }
+  }
   return ERR_OK;
 }
