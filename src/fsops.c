@@ -210,7 +210,8 @@ static ErrVal compute_match_status(
     char_ptr package1;
     FileClaim claim1;
     while (llrb_char_ptr_fileclaim_iter_next(&iter, &package1, &claim1)) {
-      if (strcmp(package1, package) == 0) {
+      slice_uint8_t package1_slice = slice_uint8_t_from_str(package1);
+      if (slice_uint8_t_cmp(&package1_slice, &package) == 0) {
         continue;
       }
       if (is_match(*filestatus, claim1)) {
@@ -423,9 +424,10 @@ ErrVal fsops_emit_rm_rf(
     case PATH_TYPE_ERROR:
       LOG_ERROR_ARGS(
         ERR_LEVEL_ERROR,
-        "%s %s: could not stat %s: %s",
+        "%s %.*s: could not stat %s: %s",
         op,
-        pkg,
+        (int)pkg.len,
+        pkg.data,
         path,
         strerror(errno)
       );
@@ -460,9 +462,10 @@ ErrVal fsops_emit_rm_rf(
     if (listdir_portable(p, &file_entries, &dir_entries) != 0) {
       LOG_ERROR_ARGS(
         ERR_LEVEL_ERROR,
-        "%s %s: unable to list files in %s: %s",
+        "%s %.*s: unable to list files in %s: %s",
         op,
-        pkg,
+        (int)pkg.len,
+        pkg.data,
         p,
         strerror(errno)
       );
@@ -543,9 +546,11 @@ ErrVal fsops_emit_install_package(
   if (flag_duplicate && fileindex_contains_package(index, package, &changed_during_transaction)) {
     LOG_ERROR_ARGS(
       ERR_LEVEL_ERROR,
-      "install %s: package %s %s",
-      package,
-      package,
+      "install %.*s: package %.*s %s",
+      (int)package.len,
+      package.data,
+      (int)package.len,
+      package.data,
       changed_during_transaction ? "was already installed earlier in this transaction"
                                  : "is already installed"
     );
@@ -558,9 +563,10 @@ ErrVal fsops_emit_install_package(
   if (!mz_zip_reader_init_file(pZip, package_path, 0)) {
     LOG_ERROR_ARGS(
       ERR_LEVEL_ERROR,
-      "%s %s: could not open zip archive %s: %s",
+      "%s %.*s: could not open zip archive %s: %s",
       op,
-      package,
+      (int)package.len,
+      package.data,
       package_path,
       mz_zip_get_error_string(mz_zip_get_last_error(pZip))
     );
@@ -618,29 +624,31 @@ ErrVal fsops_emit_install_package(
       } else if (matchesother) {
         LOG_ERROR_ARGS(
           ERR_LEVEL_ERROR,
-          "%s %s: file conflict on %s: file exists and matches %s",
+          "%s %.*s: file conflict on %s: file exists and matches %s",
           op,
-          package,
+          (int)package.len,
+          package.data,
           path,
           otherpackage
         );
         should_not_install = true;
       } else {
         if (in_protected_paths(protected_paths, path)) {
-          if (fsops_emit_rm_rf(op, pkg, joinstr2(path, ".zpknew"), &pkfsops, index) != ERR_OK) {
+          if (fsops_emit_rm_rf(op, package, joinstr2(path, ".zpknew"), &pkfsops, index) != ERR_OK) {
             should_not_install = true;
             continue;
           }
           LOG_ERROR_ARGS(
             ERR_LEVEL_WARN,
-            "%s %s: installing new %s as %s.zpknew (no match + "
+            "%s %.*s: installing new %s as %s.zpknew (no match + "
             "in protected path)",
             op,
-            package,
+            (int)package.len,
+            package.data,
             path,
             path
           );
-          fsops_emit_install(op, pkg, joinstr2(path, ".zpknew"), claim, pZip, &pkfsops, index);
+          fsops_emit_install(op, package, joinstr2(path, ".zpknew"), claim, pZip, &pkfsops, index);
 
           // emit diversion for future files
           char *src = strdup(path);
@@ -650,25 +658,26 @@ ErrVal fsops_emit_install_package(
         } else {
           LOG_ERROR_ARGS(
             ERR_LEVEL_WARN,
-            "%s %s: renaming old %s to %s.zpksave (no match + "
+            "%s %.*s: renaming old %s to %s.zpksave (no match + "
             "not in protected path)",
             op,
-            package,
+            (int)package.len,
+            package.data,
             path,
             path
           );
           if (
-            fsops_emit_rm_rf(op, pkg, joinstr2(path, ".zpksave"), &pkfsops, index) != ERR_OK
+            fsops_emit_rm_rf(op, package, joinstr2(path, ".zpksave"), &pkfsops, index) != ERR_OK
           ) {
             should_not_install = true;
             continue;
           }
-          fsops_emit_mv(op, pkg, strdup(path), joinstr2(path, ".zpksave"), &pkfsops, index);
-          fsops_emit_install(op, pkg, strdup(path), claim, pZip, &pkfsops, index);
+          fsops_emit_mv(op, package, strdup(path), joinstr2(path, ".zpksave"), &pkfsops, index);
+          fsops_emit_install(op, package, strdup(path), claim, pZip, &pkfsops, index);
         }
       }
     } else {
-      fsops_emit_install(op, pkg, strdup(path), claim, pZip, &pkfsops, index);
+      fsops_emit_install(op, package, strdup(path), claim, pZip, &pkfsops, index);
     }
   }
 
@@ -708,10 +717,12 @@ ErrVal fsops_emit_uninstall_package(
   if (!fileindex_contains_package(index, package, &changed_during_transaction)) {
     LOG_ERROR_ARGS(
       ERR_LEVEL_ERROR,
-      "%s %s: package %s %s",
+      "%s %.*s: package %.*s %s",
       op,
-      package,
-      package,
+      (int)package.len,
+      package.data,
+      (int)package.len,
+      package.data,
       changed_during_transaction ? "would be uninstalled earlier during this transaction"
                                  : "is not currently installed"
     );
@@ -723,9 +734,10 @@ ErrVal fsops_emit_uninstall_package(
   if (!mz_zip_reader_init_file(zip, package_path, 0)) {
     LOG_ERROR_ARGS(
       ERR_LEVEL_ERROR,
-      "%s %s: could not open zip archive %s: %s",
+      "%s %.*s: could not open zip archive %s: %s",
       op,
-      package,
+      (int)package.len,
+      package.data,
       package_path,
       mz_zip_get_error_string(mz_zip_get_last_error(zip))
     );
@@ -782,25 +794,27 @@ ErrVal fsops_emit_uninstall_package(
       } else if (matchesother) {
         LOG_ERROR_ARGS(
           ERR_LEVEL_WARN,
-          "%s %s: file %s seems to match %s instead of "
+          "%s %.*s: file %s seems to match %s instead of "
           "this package. Leaving in place.",
           op,
-          package,
+          (int)package.len,
+          package.data,
           path,
           otherpackage
         );
       } else {
         LOG_ERROR_ARGS(
           ERR_LEVEL_WARN,
-          "%s %s: file %s does not match any package. "
+          "%s %.*s: file %s does not match any package. "
           "Leaving in place.",
           op,
-          package,
+          (int)package.len,
+          package.data,
           path
         );
       }
     } else {
-      LOG_ERROR_ARGS(ERR_LEVEL_WARN, "%s %s: file %s is already missing", op, package, path);
+      LOG_ERROR_ARGS(ERR_LEVEL_WARN, "%s %.*s: file %s is already missing", op, (int)package.len, package.data, path);
     }
   }
 

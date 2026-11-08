@@ -89,7 +89,7 @@ static int do_add(ZpkConfiguration *conf, vec_char_ptr *packages) {
     // journal intent by moving the thing first. Then we can patch it up. if
     // there's a crash.
     char *dest =
-      joinpath_slice_str(conf->cached_pkgs_path, slice_uint8_t_from_str(basename_m(rp.local_path)));
+      joinpath_slice_str(conf->installed_pkgs_path, slice_uint8_t_from_str(basename_m(rp.local_path)));
     fsops_emit_mv("install", rp.package.name, strdup(rp.local_path), dest, &fsops, &index);
 
     ErrVal err = fsops_emit_install_package(

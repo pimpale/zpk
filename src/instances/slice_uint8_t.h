@@ -12,4 +12,7 @@ slice_uint8_t slice_uint8_t_from_str(char* s);
 // allocates
 char* slice_uint8_t_to_allocated_str(slice_uint8_t in);
 
+// compare
+int slice_uint8_t_cmp(slice_uint8_t* a, slice_uint8_t* b);
+
 #endif // slice_uint8_t_h_INCLUDED

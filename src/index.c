@@ -8,8 +8,8 @@
 #include "error.h"
 #include "index.h"
 #include "instances/llrb_char_ptr_fileclaim.h"
-#include "instances/llrb_slice_uint8_t_packagedata.h"
 #include "instances/llrb_path_filestatus.h"
+#include "instances/llrb_slice_uint8_t_packagedata.h"
 #include "instances/slice_uint8_t.h"
 #include "instances/vec_char_ptr.h"
 #include "oscompatlayer.h"
@@ -32,13 +32,17 @@ void fileclaims_delete(llrb_char_ptr_fileclaim *claims) {
 // duplicate directory claims collapse silently (implied parents repeat for
 // every file below them); any duplicate involving a file claim means the zip
 // claims one path as two files or as both file and directory — reject
-static bool insert_file_claim(llrb_char_ptr_fileclaim *claims,
-                              // logging
-                              const char *op, const char *pkg,
-                              // sysroot
-                              slice_uint8_t sysroot,
-                              // key pair to insert
-                              char *path, const FileClaim *claim) {
+static bool insert_file_claim(
+  llrb_char_ptr_fileclaim *claims,
+  // logging
+  const char *op,
+  slice_uint8_t package,
+  // sysroot
+  slice_uint8_t sysroot,
+  // key pair to insert
+  char *path,
+  const FileClaim *claim
+) {
   char *fullpath = joinpath_slice_str(sysroot, slice_uint8_t_from_str(path));
   FileClaim *existing = NULL;
   if (!llrb_char_ptr_fileclaim_get_ref(claims, &fullpath, &existing)) {
@@ -48,22 +52,31 @@ static bool insert_file_claim(llrb_char_ptr_fileclaim *claims,
   }
   bool compatible = existing->is_directory && claim->is_directory;
   if (!compatible) {
-    LOG_ERROR_ARGS(ERR_LEVEL_ERROR,
-                   "%s %s: within-package conflict: path %s claimed as %s and "
-                   "as %s, skipping duplicate",
-                   op, pkg, path, existing->is_directory ? "directory" : "file",
-                   claim->is_directory ? "directory" : "file");
+    LOG_ERROR_ARGS(
+      ERR_LEVEL_ERROR,
+      "%s %.*s: within-package conflict: path %s claimed as %s and "
+      "as %s, skipping duplicate",
+      op,
+      (int)package.len,
+      package.data,
+      path,
+      existing->is_directory ? "directory" : "file",
+      claim->is_directory ? "directory" : "file"
+    );
   }
   free(fullpath);
   return compatible;
 }
 
 // collect all explicit (listed in zip) and implicit (parent directory) claims.
-void fileclaims_collect(mz_zip_archive *zip,
-                        // logging only
-                        const char *op, 
-                        slice_uint8_t package,
-                        slice_uint8_t sysroot, llrb_char_ptr_fileclaim *claims) {
+void fileclaims_collect(
+  mz_zip_archive *zip,
+  // logging only
+  const char *op,
+  slice_uint8_t package,
+  slice_uint8_t sysroot,
+  llrb_char_ptr_fileclaim *claims
+) {
   llrb_char_ptr_fileclaim_new(claims);
   mz_uint num_files = mz_zip_reader_get_num_files(zip);
 COLLECT_ONE_FILE:
@@ -71,9 +84,14 @@ COLLECT_ONE_FILE:
     mz_zip_archive_file_stat file_stat;
     if (!mz_zip_reader_file_stat(zip, i, &file_stat)) {
       LOG_ERROR_ARGS(
-          ERR_LEVEL_ERROR,
-          "%s %s: could not get file stat for file %u in zip: %s, skipping", op,
-          package, i, mz_zip_get_error_string(mz_zip_get_last_error(zip)));
+        ERR_LEVEL_ERROR,
+        "%s %.*s: could not get file stat for file %u in zip: %s, skipping",
+        op,
+        (int)package.len,
+        package.data,
+        i,
+        mz_zip_get_error_string(mz_zip_get_last_error(zip))
+      );
       continue;
     }
 
@@ -85,15 +103,26 @@ COLLECT_ONE_FILE:
     char *normalized = normalize(name);
     defer free(normalized);
     if (normalized == NULL) {
-      LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "%s %s: invalid filename %s, skipping",
-                     op, package, name);
+      LOG_ERROR_ARGS(
+        ERR_LEVEL_ERROR,
+        "%s %.*s: invalid filename %s, skipping",
+        op,
+        (int)package.len,
+        package.data,
+        name
+      );
       continue;
     }
     if (!file_stat.m_is_directory && !file_stat.m_is_supported) {
-      LOG_ERROR_ARGS(ERR_LEVEL_ERROR,
-                     "%s %s: file %s is encrypted or uses an unsupported "
-                     "compression method, skipping",
-                     op, package, normalized);
+      LOG_ERROR_ARGS(
+        ERR_LEVEL_ERROR,
+        "%s %.*s: file %s is encrypted or uses an unsupported "
+        "compression method, skipping",
+        op,
+        (int)package.len,
+        package.data,
+        normalized
+      );
       continue;
     }
 
@@ -104,24 +133,26 @@ COLLECT_ONE_FILE:
         continue;
       }
       *p = '\0';
-      if (!insert_file_claim(claims, op, package, sysroot, normalized,
-                             &dir_claim)) {
+      if (!insert_file_claim(claims, op, package, sysroot, normalized, &dir_claim)) {
         continue COLLECT_ONE_FILE;
       }
       *p = '/';
     }
 
     FileClaim claim = {
-        .file_index = i,
-        .crc32 = file_stat.m_is_directory ? 0 : file_stat.m_crc32,
-        .is_directory = file_stat.m_is_directory,
+      .file_index = i,
+      .crc32 = file_stat.m_is_directory ? 0 : file_stat.m_crc32,
+      .is_directory = file_stat.m_is_directory,
     };
     insert_file_claim(claims, op, package, sysroot, normalized, &claim);
   }
 }
 
-bool fileindex_contains_package(FileIndex *fileindex, slice_uint8_t package,
-                                bool *changed_during_transaction) {
+bool fileindex_contains_package(
+  FileIndex *fileindex,
+  slice_uint8_t package,
+  bool *changed_during_transaction
+) {
   llrb_slice_uint8_t_packagedata *packages = &fileindex->packages;
   PackageData packagedata;
   if (llrb_slice_uint8_t_packagedata_get(packages, &package, &packagedata)) {
@@ -137,27 +168,35 @@ bool fileindex_contains_package(FileIndex *fileindex, slice_uint8_t package,
 // consuming the tree: each path key is either handed to the index or freed.
 // on return `claims` is empty (but not deleted!)
 // if the package already exists, don't crash
-void merge_claims_into_index(FileIndex *fileindex, slice_uint8_t package,
-                             llrb_char_ptr_fileclaim *claims,
-                             bool simulate_installed) {
+void merge_claims_into_index(
+  FileIndex *fileindex,
+  slice_uint8_t package,
+  llrb_char_ptr_fileclaim *claims,
+  bool simulate_installed
+) {
 
   {
     llrb_slice_uint8_t_packagedata *packages = &fileindex->packages;
-    char *owned_package_basename = strdup(package);
+    slice_uint8_t owned_package_basename;
+    if (slice_uint8_t_dup(&package, &owned_package_basename) != SLICE_ERR_OK) {
+      assert(false);
+    }
     PackageData packagedata_ins = {
-        .installed = true,
-        .changed_during_transaction = simulate_installed,
+      .installed = true,
+      .changed_during_transaction = simulate_installed,
     };
-    if (llrb_slice_uint8_t_packagedata_insert(packages, &owned_package_basename,
-                                         &packagedata_ins) == NULL) {
+    if (
+      llrb_slice_uint8_t_packagedata_insert(packages, &owned_package_basename, &packagedata_ins)
+      == NULL
+    ) {
       // the package already existed, we can free this
       // but remember: it can be the case that the package exists in the map but
       // was uninstalled in a prior transaction
-      defer free(owned_package_basename);
+      defer free(owned_package_basename.data);
 
       PackageData *packagedata_cur;
-      bool got_ref = llrb_slice_uint8_t_packagedata_get_ref(
-          packages, &owned_package_basename, &packagedata_cur);
+      bool got_ref =
+        llrb_slice_uint8_t_packagedata_get_ref(packages, &owned_package_basename, &packagedata_cur);
       assert(got_ref);
 
       // now set the current value of the packagedata, overwriting
@@ -183,7 +222,7 @@ void merge_claims_into_index(FileIndex *fileindex, slice_uint8_t package,
       // path already indexed; the index keeps its own key
       free(path);
     }
-    char *key = strdup(package);
+    char *key = slice_uint8_t_to_allocated_str(package);
     if (llrb_char_ptr_fileclaim_insert(&data->claims, &key, &claim) == NULL) {
       // if the entry is already there, overwrite its data
       FileClaim *pClaim;
@@ -200,9 +239,12 @@ void merge_claims_into_index(FileIndex *fileindex, slice_uint8_t package,
 // not there.
 // leaves tombstone entry in packages to allow us to raise more meaningful
 // errors
-void remove_claims_from_index(FileIndex *fileindex, slice_uint8_t package,
-                              llrb_char_ptr_fileclaim *claims,
-                              bool simulate_uninstall) {
+void remove_claims_from_index(
+  FileIndex *fileindex,
+  slice_uint8_t package,
+  llrb_char_ptr_fileclaim *claims,
+  bool simulate_uninstall
+) {
   llrb_slice_uint8_t_packagedata *packages = &fileindex->packages;
 
   PackageData *packagedata;
@@ -213,6 +255,9 @@ void remove_claims_from_index(FileIndex *fileindex, slice_uint8_t package,
   packagedata->installed = false;
   packagedata->changed_during_transaction = simulate_uninstall;
 
+  char* package_asciiz = slice_uint8_t_to_allocated_str(package);
+  defer free(package_asciiz);
+
   llrb_path_indexdata *index = &fileindex->index;
   llrb_char_ptr_fileclaim_iter iter;
   llrb_char_ptr_fileclaim_iter_begin(claims, &iter);
@@ -222,8 +267,7 @@ void remove_claims_from_index(FileIndex *fileindex, slice_uint8_t package,
     IndexData *data = NULL;
     if (llrb_path_indexdata_get_ref(index, &path, &data)) {
       char_ptr removed_key = NULL;
-      if (llrb_char_ptr_fileclaim_remove(&data->claims, &package, &removed_key,
-                                         NULL)) {
+      if (llrb_char_ptr_fileclaim_remove(&data->claims, &package_asciiz, &removed_key, NULL)) {
         free(removed_key);
         if (data->claims.len == 0) {
           char_ptr removed_path = NULL;
@@ -240,8 +284,7 @@ void remove_claims_from_index(FileIndex *fileindex, slice_uint8_t package,
 // the files in it
 // only_installed (mandatory for now) only builds the index with installed files
 // (useful for ownership tests)
-ErrVal fileindex_build(FileIndex *fileindex, slice_uint8_t sysroot,
-                       slice_uint8_t pkgs_path) {
+ErrVal fileindex_build(FileIndex *fileindex, slice_uint8_t sysroot, slice_uint8_t pkgs_path) {
   llrb_slice_uint8_t_packagedata *packages = &fileindex->packages;
   llrb_slice_uint8_t_packagedata_new(packages);
 
@@ -256,8 +299,7 @@ ErrVal fileindex_build(FileIndex *fileindex, slice_uint8_t sysroot,
   llrb_char_ptr_resolvedpackage_new(&installed_packages);
   defer llrb_char_ptr_resolvedpackage_delete_and_freeowned(&installed_packages);
 
-  if (resolve_package_paths_installed(&installed_packages, pkgs_path, NULL,
-                                      true) != ERR_OK) {
+  if (resolve_package_paths_installed(&installed_packages, pkgs_path, NULL, true) != ERR_OK) {
     return ERR_UNKNOWN;
   }
 
@@ -269,10 +311,12 @@ ErrVal fileindex_build(FileIndex *fileindex, slice_uint8_t sysroot,
     mz_zip_zero_struct(&zip);
     defer mz_zip_reader_end(&zip);
     if (!mz_zip_reader_init_file(&zip, rp.local_path, 0)) {
-      LOG_ERROR_ARGS(ERR_LEVEL_ERROR,
-                     "index %s: could not open zip archive: %s",
-                     rp.local_path,
-                     mz_zip_get_error_string(mz_zip_get_last_error(&zip)));
+      LOG_ERROR_ARGS(
+        ERR_LEVEL_ERROR,
+        "index %s: could not open zip archive: %s",
+        rp.local_path,
+        mz_zip_get_error_string(mz_zip_get_last_error(&zip))
+      );
       continue;
     }
     llrb_char_ptr_fileclaim claims;
@@ -285,14 +329,19 @@ ErrVal fileindex_build(FileIndex *fileindex, slice_uint8_t sysroot,
 
 // computes the whole-file crc32 into *out. op/pkg are only for log context and
 // may be NULL to log without it
-static ErrVal file_crc32(const char *path, uint32_t *out, const char *op,
-                           slice_uint8_t package) {
+static ErrVal file_crc32(const char *path, uint32_t *out, const char *op, slice_uint8_t package) {
   FILE *f = fopen(path, "rb");
   if (f == NULL) {
-    if (op != NULL && pkg != NULL) {
-      LOG_ERROR_ARGS(ERR_LEVEL_ERROR,
-                     "%s %s: could not open file %s to compute hash: %s", op,
-                     pkg, path, strerror(errno));
+    if (op != NULL && package.data != NULL) {
+      LOG_ERROR_ARGS(
+        ERR_LEVEL_ERROR,
+        "%s %.*s: could not open file %s to compute hash: %s",
+        op,
+        (int)package.len,
+        package.data,
+        path,
+        strerror(errno)
+      );
     }
     return ERR_NOSUCHFILE;
   }
@@ -301,13 +350,19 @@ static ErrVal file_crc32(const char *path, uint32_t *out, const char *op,
   mz_ulong crc = MZ_CRC32_INIT;
   uint8_t buf[64 * 1024];
   size_t n;
-  while ((n = fread(buf, 1, sizeof buf, f)) > 0)
+  while ((n = fread(buf, 1, sizeof buf, f)) > 0) {
     crc = mz_crc32(crc, buf, n);
+  }
   if (ferror(f) != 0) {
-    if (op != NULL && pkg != NULL) {
-      LOG_ERROR_ARGS(ERR_LEVEL_ERROR,
-                     "%s %s: read error while computing hash of %s", op, pkg,
-                     path);
+    if (op != NULL && package.data != NULL) {
+      LOG_ERROR_ARGS(
+        ERR_LEVEL_ERROR,
+        "%s %.*s: read error while computing hash of %s",
+        op,
+        (int)package.len,
+        package.data,
+        path
+      );
     }
     return ERR_NOSUCHFILE;
   }
@@ -315,21 +370,18 @@ static ErrVal file_crc32(const char *path, uint32_t *out, const char *op,
   return ERR_OK;
 }
 
-FileStatus *fileindex_status_or_default(FileIndex *fileindex,
-                                        const char *path, bool *created) {
+FileStatus *fileindex_status_or_default(FileIndex *fileindex, const char *path, bool *created) {
   FileStatus *status;
   FileStatus default_status = {};
   // create a new node for future reference.
   char *pathkey = strdup(path);
-  status = llrb_path_filestatus_insert(&fileindex->statuses, &pathkey,
-                                       &default_status);
+  status = llrb_path_filestatus_insert(&fileindex->statuses, &pathkey, &default_status);
   if (created != NULL) {
     *created = status != NULL;
   }
   if (status == NULL) {
     // node already exists
-    bool got_ref =
-        llrb_path_filestatus_get_ref(&fileindex->statuses, &pathkey, &status);
+    bool got_ref = llrb_path_filestatus_get_ref(&fileindex->statuses, &pathkey, &status);
     assert(got_ref);
     free(pathkey);
   }
@@ -339,48 +391,57 @@ FileStatus *fileindex_status_or_default(FileIndex *fileindex,
 // pass op and pkg to enable logging
 // creates an empty llrb leaf if needed
 // returns Indexdata pointer on success, NULL on failure
-FileStatus *fileindex_ensure_actual(FileIndex *fileindex,
-                                    const char *fullpath,
-                                    // logging purposes only
-                                    const char *op,   slice_uint8_t package) {
+FileStatus *fileindex_ensure_actual(
+  FileIndex *fileindex,
+  const char *fullpath,
+  // logging purposes only
+  const char *op,
+  slice_uint8_t package
+) {
   bool created;
-  FileStatus *status =
-      fileindex_status_or_default(fileindex, fullpath, &created);
+  FileStatus *status = fileindex_status_or_default(fileindex, fullpath, &created);
   if (!created) {
     return status;
   }
 
   switch (path_type_portable(fullpath)) {
-  case PATH_TYPE_MISSING:
-    status->exists = false;
-    break;
-  case PATH_TYPE_DIR:
-    status->exists = true;
-    status->is_directory = true;
-    break;
-  case PATH_TYPE_FILE: {
-    uint32_t crc;
-    ErrVal err = file_crc32(fullpath, &crc, op, pkg);
-    if (err != ERR_OK) {
-      return NULL;
+    case PATH_TYPE_MISSING:
+      status->exists = false;
+      break;
+    case PATH_TYPE_DIR:
+      status->exists = true;
+      status->is_directory = true;
+      break;
+    case PATH_TYPE_FILE: {
+      uint32_t crc;
+      ErrVal err = file_crc32(fullpath, &crc, op, package);
+      if (err != ERR_OK) {
+        return NULL;
+      }
+      status->exists = true;
+      status->is_directory = false;
+      status->crc32 = crc;
+      break;
     }
-    status->exists = true;
-    status->is_directory = false;
-    status->crc32 = crc;
-    break;
-  }
-  case PATH_TYPE_OTHER:
-    // sockets, devices, fifos: reading one for a crc could block forever, so
-    // record it as a file whose crc only collides with an empty file's (0)
-    status->exists = true;
-    status->is_directory = false;
-    status->crc32 = 0;
-    break;
-  case PATH_TYPE_ERROR:
-    LOG_ERROR_ARGS(ERR_LEVEL_ERROR, "%s %s: could not stat %s: %s", op, pkg,
-                   fullpath, strerror(errno));
+    case PATH_TYPE_OTHER:
+      // sockets, devices, fifos: reading one for a crc could block forever, so
+      // record it as a file whose crc only collides with an empty file's (0)
+      status->exists = true;
+      status->is_directory = false;
+      status->crc32 = 0;
+      break;
+    case PATH_TYPE_ERROR:
+      LOG_ERROR_ARGS(
+        ERR_LEVEL_ERROR,
+        "%s %.*s: could not stat %s: %s",
+        op,
+        (int)package.len,
+        package.data,
+        fullpath,
+        strerror(errno)
+      );
 
-    return NULL;
+      return NULL;
   }
 
   return status;

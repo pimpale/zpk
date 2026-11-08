@@ -6,7 +6,7 @@
 #define LLRB_NAME slice_uint8_t_packagedata
 #define LLRB_KEY slice_uint8_t
 #define LLRB_VALUE PackageData
-#define LLRB_COMPARE(a, b) strcmp(*(a), *(b))
+#define LLRB_COMPARE(a, b) slice_uint8_t_cmp((a), (b))
 #include <llrb/llrb_impl.h>
 #undef LLRB_COMPARE
 #undef LLRB_VALUE
