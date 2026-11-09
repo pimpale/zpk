@@ -129,11 +129,23 @@ static ErrVal resolve_newest_packages(
       ) {
         return ERR_ALLOCFAIL;
       }
-      if (!decode_uri(br.source_uri_storage, &br.source_uri)) {
+      if (!parse_uri(br.source_uri_storage, &br.source_uri, true)) {
+        LOG_ERROR_ARGS(
+          ERR_LEVEL_DEBUG,
+          "resolve newest: %.*s is not a valid URI",
+          (int)br.source_uri_storage.len,
+          br.source_uri_storage.data
+        );
         free(br.source_uri_storage.data);
         continue;
       }
       if (!package_data(&br.package, br.source_uri.path, ".zip")) {
+        LOG_ERROR_ARGS(
+          ERR_LEVEL_DEBUG,
+          "resolve newest: %.*s does not contain a validly formatted package name",
+          (int)br.source_uri.path.len,
+          br.source_uri.path.data
+        );
         free(br.source_uri_storage.data);
         continue;
       }
@@ -150,7 +162,7 @@ static ErrVal resolve_newest_packages(
         } else {
           free(key);
 
-          if (version_is_greater(br.package.version,brp->package.version)) {
+          if (version_is_greater(br.package.version, brp->package.version)) {
             // own br
             delete_ResolvedPackage(brp);
             *brp = br;
@@ -272,44 +284,49 @@ static HttpCallbackError linkacc_callback(void *context, const uint8_t *buf, siz
 }
 
 static void populate_repository(RepositoryCallbackData *r) {
-  uri_parse_t parsed_uri;
-  bool parse_succeeded = decode_uri(r->uri, &parsed_uri);
+  uri_parse_t repo_uri;
+  bool parse_succeeded = parse_uri(r->uri, &repo_uri, true);
   // should have been caught earlier
   assert(parse_succeeded);
 
   HttpProtocol protocol;
-  if (slice_uint8_t_eq(parsed_uri.scheme, slice_uint8_t_from_str("file"))) {
-    populate_file(r, parsed_uri.path);
+  if (slice_uint8_t_eq(repo_uri.scheme, slice_uint8_t_from_str("file:"))) {
+    populate_file(r, repo_uri.path);
     return;
-  } else if (slice_uint8_t_eq(parsed_uri.scheme, slice_uint8_t_from_str("http"))) {
+  } else if (slice_uint8_t_eq(repo_uri.scheme, slice_uint8_t_from_str("http:"))) {
     protocol = HTTP_PROTOCOL_HTTP;
-  } else if (slice_uint8_t_eq(parsed_uri.scheme, slice_uint8_t_from_str("https"))) {
+  } else if (slice_uint8_t_eq(repo_uri.scheme, slice_uint8_t_from_str("https:"))) {
     protocol = HTTP_PROTOCOL_HTTPS;
   } else {
     LOG_ERROR_ARGS(
       ERR_LEVEL_ERROR,
       "resolve: unknown scheme %.*s (only file:, http:, and https: permitted)",
-      (int)parsed_uri.scheme.len,
-      parsed_uri.scheme.data
+      (int)repo_uri.scheme.len,
+      repo_uri.scheme.data
     );
     r->status = ERR_NOTSUPPORTED;
     return;
   }
 
-  char *host_asciiz = slice_uint8_t_to_allocated_str(parsed_uri.host);
+  char *host_asciiz = slice_uint8_t_to_allocated_str(repo_uri.host);
   defer free(host_asciiz);
 
   char *port_asciiz = slice_uint8_t_to_allocated_str(
-    parsed_uri.has_port ? parsed_uri.port
-                        : slice_uint8_t_from_str(protocol == HTTP_PROTOCOL_HTTP ? "80" : "443")
+    repo_uri.has_port ? repo_uri.port
+                      : slice_uint8_t_from_str(protocol == HTTP_PROTOCOL_HTTP ? "80" : "443")
   );
   defer free(port_asciiz);
 
-  char *path_asciiz = slice_uint8_t_to_allocated_str(parsed_uri.path);
+  char *path_asciiz = slice_uint8_t_to_allocated_str(repo_uri.path);
   defer free(path_asciiz);
 
-  LinkAccContext ctx = {.state = LINK_ACC_HTML_TEXT, .failed = false, .links = &r->package_uris};
+  LinkAccContext ctx = {.state = LINK_ACC_HTML_TEXT, .failed = false};
+
   vec_uint8_t_init(&ctx.linkbuf);
+  defer vec_uint8_t_delete(&ctx.linkbuf);
+
+  vec_slice_uint8_t_init(&ctx.links);
+  defer vec_slice_uint8_t_delete_and_freeowned(&ctx.links);
 
   HttpClientError hce = http_client_get(
     protocol,
@@ -322,10 +339,35 @@ static void populate_repository(RepositoryCallbackData *r) {
     linkacc_callback
   );
 
-  vec_uint8_t_delete(&ctx.linkbuf);
-
   switch (hce) {
     case HTTP_CLIENT_ERR_OK:
+      for (size_t i = 0; i < ctx.links.len; i++) {
+        slice_uint8_t link = *vec_slice_uint8_t_at(&ctx.links, i);
+        uri_parse_t link_parsed;
+        if (!parse_uri(link, &link_parsed, false)) {
+          LOG_ERROR_ARGS(
+            ERR_LEVEL_DEBUG,
+            "resolve: parse html: link %.*s is not a valid relative URI, skipping",
+            (int)link.len,
+            link.data
+          );
+          continue;
+        }
+        slice_uint8_t resolved_link;
+        if (!resolve_uri_ref(&repo_uri, &link_parsed, &resolved_link)) {
+          LOG_ERROR_ARGS(
+            ERR_LEVEL_DEBUG,
+            "resolve: parse html: failed to resolve link %.*s with respect to repo %.*s, "
+            "skipping",
+            (int)link.len,
+            link.data,
+            (int)r->uri.len,
+            r->uri.data
+          );
+          continue;
+        }
+        vec_slice_uint8_t_push(&r->package_uris, &resolved_link);
+      }
       r->status = ERR_OK;
       return;
     case HTTP_CLIENT_ERR_OUT_OF_MEMORY:
@@ -361,7 +403,7 @@ static void download_file(FileDownloadCallbackData *d) {
   defer free(path_asciiz);
 
   HttpProtocol protocol;
-  if (slice_uint8_t_eq(d->rp->source_uri.scheme, slice_uint8_t_from_str("file"))) {
+  if (slice_uint8_t_eq(d->rp->source_uri.scheme, slice_uint8_t_from_str("file:"))) {
     LOG_ERROR_ARGS(
       ERR_LEVEL_DEBUG,
       "download: copying file: from %s to %s",
@@ -375,9 +417,9 @@ static void download_file(FileDownloadCallbackData *d) {
     }
     d->status = ERR_OK;
     return;
-  } else if (slice_uint8_t_eq(d->rp->source_uri.scheme, slice_uint8_t_from_str("http"))) {
+  } else if (slice_uint8_t_eq(d->rp->source_uri.scheme, slice_uint8_t_from_str("http:"))) {
     protocol = HTTP_PROTOCOL_HTTP;
-  } else if (slice_uint8_t_eq(d->rp->source_uri.scheme, slice_uint8_t_from_str("https"))) {
+  } else if (slice_uint8_t_eq(d->rp->source_uri.scheme, slice_uint8_t_from_str("https:"))) {
     protocol = HTTP_PROTOCOL_HTTPS;
   } else {
     LOG_ERROR_ARGS(
@@ -474,6 +516,10 @@ ErrVal resolve_and_fetch_package_paths_repositories(
     return ERR_UNKNOWN;
   }
   defer tcp_cleanup_portable();
+
+  if (vec_slice_uint8_t_len(cacert_paths) == 0) {
+    LOG_ERROR(ERR_LEVEL_WARN, "tls setup: no certificate paths are listed");
+  }
 
   // prepare tls context
   vec_br_x509_trust_anchor anchors;

@@ -42,7 +42,7 @@ typedef struct {
   LinkAccState state;
   bool failed;
   vec_uint8_t linkbuf;
-  vec_slice_uint8_t* links;
+  vec_slice_uint8_t links;
 } LinkAccContext;
 
 LinkAccError link_acc(LinkAccContext *context, const uint8_t *buf, size_t len);

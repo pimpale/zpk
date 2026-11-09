@@ -3,16 +3,91 @@
 #include "tcpcompatlayer_error.h"
 
 #include <assert.h>
+#include <bearssl/inc/bearssl_x509.h>
 #include <stdlib.h>
 #include <string.h>
+
+// insecure TLS engine
 
 typedef struct {
   const br_x509_class *vtable; // vtable must be first.
   br_x509_decoder_context decoder;
   size_t certificate_count;
-  unsigned error;
+  unsigned int error;
 } InsecureX509;
 
+// forward declarations
+static void insecure_start_chain(const br_x509_class **ctx, const char *server_name);
+static void insecure_start_cert(const br_x509_class **ctx, uint32_t length);
+static void insecure_append(const br_x509_class **ctx, const unsigned char *buf, size_t len);
+static void insecure_end_cert(const br_x509_class **ctx);
+static unsigned int insecure_end_chain(const br_x509_class **ctx);
+static const br_x509_pkey *insecure_get_pkey(const br_x509_class *const *ctx, unsigned *usages);
+
+static const br_x509_class insecure_x509_vtable = {
+  .context_size = sizeof(InsecureX509),
+  .start_chain = insecure_start_chain,
+  .start_cert = insecure_start_cert,
+  .append = insecure_append,
+  .end_cert = insecure_end_cert,
+  .end_chain = insecure_end_chain,
+  .get_pkey = insecure_get_pkey,
+};
+
+static void insecure_x509_init(InsecureX509 *ctx) {
+  *ctx = (InsecureX509){
+    .vtable = &insecure_x509_vtable,
+  };
+  br_x509_decoder_init(&ctx->decoder, NULL, NULL);
+}
+
+// for the following: we only care about the first cert passed, and can ignore the rest
+
+static void insecure_start_chain(const br_x509_class **ctx, const char *server_name) {
+  (void)server_name;
+  insecure_x509_init((InsecureX509 *)ctx);
+}
+
+static void insecure_start_cert(const br_x509_class **ctx, uint32_t length) {
+  InsecureX509 *xc = (InsecureX509 *)ctx;
+  (void)length;
+  xc->certificate_count++;
+}
+
+static void insecure_append(const br_x509_class **ctx, const unsigned char *buf, size_t len) {
+  InsecureX509 *xc = (InsecureX509 *)ctx;
+  if (xc->certificate_count == 1 && xc->error == 0) {
+    br_x509_decoder_push(&xc->decoder, buf, len);
+  }
+}
+
+static void insecure_end_cert(const br_x509_class **ctx) {
+  InsecureX509 *xc = (InsecureX509 *)ctx;
+  if (xc->certificate_count == 1) {
+    xc->error = (unsigned int)br_x509_decoder_last_error(&xc->decoder);
+  }
+}
+
+static unsigned int insecure_end_chain(const br_x509_class **ctx) {
+  InsecureX509 *xc = (InsecureX509 *)ctx;
+  if(xc->certificate_count == 0) {
+    return BR_ERR_X509_EMPTY_CHAIN;
+  }
+  return xc->error;
+}
+
+static const br_x509_pkey *insecure_get_pkey(const br_x509_class *const *ctx, unsigned *usages) {
+  const InsecureX509 *xc = (const InsecureX509 *)ctx;
+  if(xc->error != 0 || xc->certificate_count == 0) {
+    return NULL;
+  }
+
+  const br_x509_pkey *out = br_x509_decoder_get_pkey(&xc->decoder);
+  if(out != NULL && usages != NULL) {
+    *usages = BR_KEYTYPE_SIGN | BR_KEYTYPE_KEYX;
+  }
+  return out;
+}
 
 struct tls_data {
   Transport lower;
@@ -142,8 +217,7 @@ tls_initialize(TlsData *tls, const char *host, vec_br_x509_trust_anchor *anchors
   br_ssl_client_init_full(&tls->client, &tls->x509, anchors->pData, anchors->len);
 
   if (!strict_ssl) {
-    // TODO:
-    // insecure_x509_init(&tls->insecure_x509);
+    insecure_x509_init(&tls->insecure_x509);
     br_ssl_engine_set_x509(&tls->client.eng, &tls->insecure_x509.vtable);
   }
 

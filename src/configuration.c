@@ -93,12 +93,12 @@ static slice_uint8_t resolve_path_uri(
 ) {
   // try to parse uri
   uri_parse_t parsed;
-  if (!decode_uri(input, &parsed)) {
+  if (!parse_uri(input, &parsed, true)) {
     LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "%.*s: failed to parse URI", (int)input.len, input.data);
     PANIC();
   }
 
-  if (!slice_uint8_t_eq(parsed.scheme, slice_uint8_t_from_str("file"))) {
+  if (!slice_uint8_t_eq(parsed.scheme, slice_uint8_t_from_str("file:"))) {
     return slicedup(input);
   }
   parsed.path = resolve_path(config_dir, parsed.path, expand_tilde, home);

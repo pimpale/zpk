@@ -6,7 +6,7 @@ static LinkAccError push_link(LinkAccContext *context) {
     .data = context->linkbuf.pData,
     .len = context->linkbuf.len,
   };
-  if (vec_slice_uint8_t_push(context->links, &slice) != VEC_ERR_OK) {
+  if (vec_slice_uint8_t_push(&context->links, &slice) != VEC_ERR_OK) {
     return LINK_ACC_ERR_NOMEM;
   }
   if (vec_uint8_t_init(&context->linkbuf)) {
