@@ -16,21 +16,22 @@ zpk mimics apk's interface, but implements only a subset of the functionality:
 usage: zpk [options] <command> [args]
 
 commands:
-  add <pkg>...             install packages
-  del <pkg>...             uninstall packages
-  fetch [-o DIR] <pkg>...  download packages without installing
-  upgrade [pkg...]         upgrade packages (all if none given)
-  fix [pkg...]             reinstall broken packages (all if none given)
-  list [-I] [-u] [-a] [-O] list installed/upgradable/available/orphaned packages
-  info -W <path>           show which package owns a path
+  add <pkg>...                   install packages
+  del <pkg>...                   uninstall packages
+  fetch [-o DIR] <pkg>...        download packages without installing
+  upgrade [pkg...]               upgrade packages (all if none given)
+  fix [pkg...]                   reinstall broken packages (all if none given)
+  list [-I] [-u] [-a] [-O]       list installed/upgradable/available/orphaned packages
+  info -W <path>                 show which package owns a path
 
 global options:
-  -p, --root DIR           install to alternate root
-  -X, --repository URI     add a repository (repeatable)
-      --config FILE        use FILE instead of searching for .zpk.ini
-  -s, --simulate           simulate the operation; make no changes
-  -v, --verbose            raise log level to info; -vv for debug
-  -h, --help               show this help
+  -p, --root DIR                 install to alternate root
+  -X, --repository URI           add a repository (repeatable)
+      --config FILE              use FILE instead of searching for .zpk.ini
+  -s, --simulate[=BOOL]          when enabled, downloads data but does not commit to FS
+  -v, --verbose                  raise log level to info; -vv for debug
+      --check-certificate[=BOOL] when turned off, disables certificate validation
+  -h, --help                     show this help
 ```
 
 ## Unsupported
